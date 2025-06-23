@@ -8,13 +8,20 @@ embed-resource = "3.0.4"
 
 [dependencies]
 redb = "2.6.0"
-winreg = "0.55"
 notify = "8"
 notify-debouncer-full = "0.5.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_derive = "1.0.219"
 bincode = "2.0.1"
 rayon = "1.10.0"
+
+[dependencies.windows]
+version = "0.61.3"
+features = [
+    "Win32_System_Registry",
+    "Win32_Foundation",
+    "Win32_Security"
+]
 
 [dev-dependencies]
 tempfile = "3.20.0"

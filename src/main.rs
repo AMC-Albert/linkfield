@@ -1,5 +1,4 @@
 use redb::Builder;
-use std::env;
 use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
@@ -9,6 +8,7 @@ use file_cache::FileCache;
 mod move_heuristics;
 use move_heuristics::{FileEventKind, MoveHeuristics, make_file_event};
 use std::sync::{Arc, Mutex};
+mod windows_registry;
 
 fn start_watcher<P: AsRef<Path>>(
     watch_path: P,
@@ -147,35 +147,16 @@ fn start_watcher<P: AsRef<Path>>(
     Ok(())
 }
 
-#[cfg(windows)]
-#[allow(dead_code)]
-fn register_redb_extension(all_users: bool) -> std::io::Result<()> {
-    use winreg::RegKey;
-    use winreg::enums::*;
-    let exe_path = env::current_exe()?.to_str().unwrap().to_string();
-    let prog_id = "Linkfield.redb";
-    let friendly_name = "Linkfield Database File";
-    let root = if all_users {
-        RegKey::predef(HKEY_LOCAL_MACHINE)
-    } else {
-        RegKey::predef(HKEY_CURRENT_USER)
-    };
-    // Set .redb default value to our ProgID
-    let (redb_key, _) = root.create_subkey(r"Software\Classes\.redb")?;
-    redb_key.set_value("", &prog_id)?;
-    // Register ProgID
-    let (progid_key, _) = root.create_subkey(format!(r"Software\\Classes\\{}", prog_id))?;
-    progid_key.set_value("", &friendly_name)?;
-    let (shell_key, _) = progid_key.create_subkey(r"shell\open\command")?;
-    shell_key.set_value("", &format!("\"{}\" \"%1\"", exe_path))?;
-    // Set the icon for .redb files to the program's own icon
-    let (default_icon_key, _) = progid_key.create_subkey("DefaultIcon")?;
-    default_icon_key.set_value("", &format!("\"{}\",0", exe_path))?;
-    println!(".redb extension registered to {}", exe_path);
-    Ok(())
-}
-
 fn main() {
+    #[cfg(windows)]
+    {
+        use windows_registry::{is_redb_registered, register_redb_extension};
+        if !is_redb_registered() {
+            if let Err(e) = register_redb_extension(false) {
+                eprintln!("[main] Failed to register .redb extension: {e}");
+            }
+        }
+    }
     println!("[main] Starting linkfield");
     std::io::stdout().flush().unwrap();
     let args: Vec<String> = std::env::args().collect();
