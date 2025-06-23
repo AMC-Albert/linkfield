@@ -1,9 +1,15 @@
+use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
-#[derive(Debug, Clone)]
+pub const FILE_CACHE_TABLE: redb::TableDefinition<&str, &[u8]> =
+    redb::TableDefinition::new("file_cache");
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct FileMeta {
     #[allow(dead_code)]
     pub path: PathBuf,
@@ -30,62 +36,178 @@ impl FileMeta {
                 .map(|s| s.to_string()),
         })
     }
+    pub fn serialize(&self) -> Vec<u8> {
+        encode_to_vec(self, bincode::config::standard()).expect("FileMeta serialization failed")
+    }
+    pub fn deserialize(bytes: &[u8]) -> Self {
+        let (meta, _): (Self, _) = decode_from_slice(bytes, bincode::config::standard())
+            .expect("FileMeta deserialization failed");
+        meta
+    }
 }
 
-/// A cache of file metadata for all watched files.
+/// A cache of file metadata for all watched files, backed by redb.
 pub struct FileCache {
     files: HashMap<PathBuf, FileMeta>,
     last_scan: Instant,
+    db: Option<redb::Database>,
 }
 
 impl FileCache {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             files: HashMap::new(),
             last_scan: Instant::now(),
+            db: None,
         }
     }
-
+    pub fn with_redb(db: redb::Database) -> Self {
+        Self {
+            files: HashMap::new(),
+            last_scan: Instant::now(),
+            db: Some(db),
+        }
+    }
     /// Scan a directory recursively and cache all files
     pub fn scan_dir(&mut self, dir: &Path) {
+        println!("[FileCache] scan_dir: {:?}", dir);
+        std::io::stdout().flush().unwrap();
         self.files.clear();
         self.last_scan = Instant::now();
-        self.add_dir(dir);
-    }
-
-    fn add_dir(&mut self, dir: &Path) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    self.add_dir(&path);
-                } else if let Some(meta) = FileMeta::from_path(&path) {
-                    self.files.insert(path, meta);
+        let files = Self::collect_files_parallel(dir, 0);
+        for (path, meta) in files {
+            self.files.insert(path, meta);
+        }
+        // Batch insert all files into redb in a single transaction
+        if let Some(db) = &self.db {
+            let write_txn = db.begin_write().expect("Failed to begin write txn");
+            {
+                let mut table = write_txn
+                    .open_table(FILE_CACHE_TABLE)
+                    .expect("Failed to open file_cache table");
+                for (path, meta) in &self.files {
+                    let key = path.to_string_lossy();
+                    table
+                        .insert(key.as_ref(), meta.serialize().as_slice())
+                        .expect("Failed to insert file meta");
                 }
+            }
+            write_txn.commit().expect("Failed to commit batch insert");
+            println!(
+                "[FileCache] Batch insert complete: {} files",
+                self.files.len()
+            );
+            std::io::stdout().flush().unwrap();
+        }
+    }
+    fn collect_files_parallel(dir: &Path, _depth: usize) -> Vec<(PathBuf, FileMeta)> {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e.filter_map(Result::ok).collect::<Vec<_>>(),
+            Err(e) => {
+                println!("[FileCache] Error reading dir {:?}: {}", dir, e);
+                return Vec::new();
+            }
+        };
+        let (dirs, files): (Vec<_>, Vec<_>) = entries
+            .into_par_iter()
+            .partition(|entry| entry.path().is_dir());
+        let mut results: Vec<(PathBuf, FileMeta)> = files
+            .into_par_iter()
+            .filter_map(|entry| {
+                let path = entry.path();
+                FileMeta::from_path(&path).map(|meta| (path, meta))
+            })
+            .collect();
+        let mut sub_results: Vec<(PathBuf, FileMeta)> = dirs
+            .into_par_iter()
+            .flat_map_iter(|entry| Self::collect_files_parallel(&entry.path(), 0))
+            .collect();
+        results.append(&mut sub_results);
+        results
+    }
+    #[allow(dead_code)]
+    fn add_dir(&mut self, dir: &Path, depth: usize) {
+        if depth > 10 {
+            println!("[FileCache] Max recursion depth reached at {:?}", dir);
+            return;
+        }
+        println!("[FileCache] add_dir: {:?}", dir);
+        std::io::stdout().flush().unwrap();
+        match fs::read_dir(dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => {
+                            let path = entry.path();
+                            println!("[FileCache] entry: {:?}", path);
+                            std::io::stdout().flush().unwrap();
+                            if path.is_dir() {
+                                self.add_dir(&path, depth + 1);
+                            } else if let Some(meta) = FileMeta::from_path(&path) {
+                                self.files.insert(path, meta);
+                            }
+                        }
+                        Err(e) => {
+                            println!("[FileCache] Error reading entry in {:?}: {}", dir, e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                println!("[FileCache] Error reading dir {:?}: {}", dir, e);
             }
         }
     }
-
     /// Update or insert a file's metadata
     pub fn update_file(&mut self, path: &Path) {
         if let Some(meta) = FileMeta::from_path(path) {
-            self.files.insert(path.to_path_buf(), meta);
+            self.files.insert(path.to_path_buf(), meta.clone());
+            if let Some(db) = &self.db {
+                let write_txn = db.begin_write().unwrap();
+                {
+                    let mut table = write_txn.open_table(FILE_CACHE_TABLE).unwrap();
+                    table
+                        .insert(path.to_string_lossy().as_ref(), meta.serialize().as_slice())
+                        .unwrap();
+                }
+                write_txn.commit().unwrap();
+            }
         }
     }
-
     /// Remove a file from the cache
     pub fn remove_file(&mut self, path: &Path) {
         self.files.remove(path);
+        if let Some(db) = &self.db {
+            let write_txn = db.begin_write().unwrap();
+            {
+                let mut table = write_txn.open_table(FILE_CACHE_TABLE).unwrap();
+                table.remove(path.to_string_lossy().as_ref()).unwrap();
+            }
+            write_txn.commit().unwrap();
+        }
     }
-
     /// Get cached metadata for a file
     pub fn get(&self, path: &Path) -> Option<&FileMeta> {
         self.files.get(path)
     }
-
     /// Get all cached files
     #[allow(dead_code)]
     pub fn all_files(&self) -> impl Iterator<Item = &FileMeta> {
         self.files.values()
+    }
+    /// Load the file cache from redb into memory
+    pub fn load_from_redb(&mut self) {
+        if let Some(db) = &self.db {
+            let read_txn = db.begin_read().unwrap();
+            let table = read_txn.open_table(FILE_CACHE_TABLE).unwrap();
+            self.files.clear();
+            for entry in table.range::<&str>(..).unwrap() {
+                let (k, v) = entry.unwrap();
+                let path = PathBuf::from(k.value());
+                let meta = FileMeta::deserialize(v.value());
+                self.files.insert(path, meta);
+            }
+        }
     }
 }
