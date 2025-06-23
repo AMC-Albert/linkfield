@@ -121,7 +121,6 @@ fn test_readers_during_rapid_writes() {
     let mut reader_handles = vec![];
     for _ in 0..5 {
         let db_reader = db.clone();
-        let table = table;
         reader_handles.push(thread::spawn(move || {
             let read_txn = db_reader.begin_read().unwrap();
             let t = read_txn.open_table(table).unwrap();

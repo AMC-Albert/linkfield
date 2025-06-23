@@ -19,13 +19,13 @@ fn temp_db() -> Database {
 #[test]
 fn test_large_batch_transaction() {
     let db = temp_db();
-    let batch_size = 10_000;
+    let batch_size: u32 = 10_000;
     {
         let write_txn = db.begin_write().unwrap();
         {
             let mut table = write_txn.open_table(TABLE).unwrap();
             for i in 0..batch_size {
-                let value = (i as u32).to_le_bytes();
+                let value = i.to_le_bytes();
                 table.insert(i, &value[..]).unwrap();
             }
         }
@@ -34,7 +34,7 @@ fn test_large_batch_transaction() {
     let read_txn = db.begin_read().unwrap();
     let table = read_txn.open_table(TABLE).unwrap();
     for i in 0..batch_size {
-        let expected = (i as u32).to_le_bytes();
+        let expected = i.to_le_bytes();
         let result = table.get(i).unwrap().unwrap();
         assert_eq!(result.value(), &expected[..]);
     }
@@ -66,7 +66,7 @@ fn test_zero_copy_and_in_place_mutation() {
 #[test]
 fn test_table_and_database_stats() {
     let db = temp_db();
-    let batch_size = 100;
+    let batch_size: u32 = 100;
     {
         let write_txn = db.begin_write().unwrap();
         {

@@ -1,52 +1,86 @@
-use redb::{Builder, Database};
-use std::sync::{Arc, Barrier};
-use std::thread;
-use std::time::Duration;
+use redb::Builder;
+use std::env;
 
-fn builder_api_demo() {
-    // Demonstrate using the Builder API to configure the database
-    let db = Builder::new()
-        .set_cache_size(8 * 1024 * 1024) // 8 MB cache
-        .create("mydb_builder_demo.redb")
-        .expect("Failed to create database with builder");
-    println!("Database created with custom builder options: 8MB cache");
-    // You can open tables and use the db as normal here
+#[cfg(windows)]
+fn register_redb_extension(all_users: bool) -> std::io::Result<()> {
+    use winreg::RegKey;
+    use winreg::enums::*;
+    let exe_path = env::current_exe()?.to_str().unwrap().to_string();
+    let prog_id = "Linkfield.redb";
+    let friendly_name = "Linkfield Database File";
+    let root = if all_users {
+        RegKey::predef(HKEY_LOCAL_MACHINE)
+    } else {
+        RegKey::predef(HKEY_CURRENT_USER)
+    };
+    // Set .redb default value to our ProgID
+    let (redb_key, _) = root.create_subkey(r"Software\Classes\.redb")?;
+    redb_key.set_value("", &prog_id)?;
+    // Register ProgID
+    let (progid_key, _) = root.create_subkey(format!(r"Software\\Classes\\{}", prog_id))?;
+    progid_key.set_value("", &friendly_name)?;
+    let (shell_key, _) = progid_key.create_subkey(r"shell\open\command")?;
+    shell_key.set_value("", &format!("\"{}\" \"%1\"", exe_path))?;
+    // Set the icon for .redb files to the program's own icon
+    let (default_icon_key, _) = progid_key.create_subkey("DefaultIcon")?;
+    default_icon_key.set_value("", &format!("\"{}\",0", exe_path))?;
+    println!(".redb extension registered to {}", exe_path);
+    Ok(())
 }
 
 fn main() {
-    builder_api_demo();
-
-    let db = Arc::new(
-        Database::create("mydb_writer_contention.redb").expect("Failed to create database"),
-    );
-    let barrier = Arc::new(Barrier::new(2));
-
-    // Writer 1: acquires the write transaction and holds it
-    let db_writer1 = db.clone();
-    let barrier_writer1 = barrier.clone();
-    let handle1 = thread::spawn(move || {
-        let write_txn = db_writer1.begin_write().unwrap();
-        println!("[Writer 1] Acquired write transaction, holding lock...");
-        barrier_writer1.wait(); // Signal Writer 2 to start
-        thread::sleep(Duration::from_secs(3)); // Hold the lock for a while
-        drop(write_txn); // Release the lock
-        println!("[Writer 1] Released write transaction");
-    });
-
-    // Writer 2: waits for Writer 1 to acquire the lock, then tries to acquire it
-    let db_writer2 = db.clone();
-    let barrier_writer2 = barrier.clone();
-    let handle2 = thread::spawn(move || {
-        barrier_writer2.wait(); // Wait for Writer 1 to acquire lock
-        println!("[Writer 2] Attempting to acquire write transaction...");
-        match db_writer2.begin_write() {
-            Ok(_txn) => {
-                println!("[Writer 2] Acquired write transaction (after Writer 1 released it)")
-            }
-            Err(e) => println!("[Writer 2] Failed to acquire write transaction: {}", e),
+    #[cfg(windows)]
+    {
+        // Register for current user. Set to true for all users (requires admin)
+        if let Err(e) = register_redb_extension(false) {
+            eprintln!("Failed to register .redb extension: {}", e);
         }
-    });
+    }
 
-    handle1.join().unwrap();
-    handle2.join().unwrap();
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 {
+        let db_path = &args[1];
+        println!("Opened via double-click or 'Open with': {}", db_path);
+        match Builder::new().open(db_path) {
+            Ok(db) => {
+                // Try to read the test_table and print the value for 'hello'
+                const TABLE: redb::TableDefinition<&str, u64> =
+                    redb::TableDefinition::new("test_table");
+                let read_txn = db.begin_read().unwrap();
+                let table = read_txn.open_table(TABLE);
+                match table {
+                    Ok(table) => match table.get("hello") {
+                        Ok(Some(val)) => println!("Found: ('hello', {})", val.value()),
+                        Ok(None) => println!("Key 'hello' not found in 'test_table'."),
+                        Err(e) => println!("Error reading from table: {}", e),
+                    },
+                    Err(e) => println!("Could not open 'test_table': {}", e),
+                }
+            }
+            Err(e) => println!("Failed to open database: {}", e),
+        }
+    } else {
+        // Create a simple test database and insert a value
+        let db = Builder::new()
+            .create_with_file_format_v3(true)
+            .create("test.redb")
+            .expect("Failed to create test.redb");
+        const TABLE: redb::TableDefinition<&str, u64> = redb::TableDefinition::new("test_table");
+        let write_txn = db.begin_write().unwrap();
+        {
+            let mut table = write_txn.open_table(TABLE).unwrap();
+            table.insert("hello", &42).unwrap();
+        }
+        write_txn.commit().unwrap();
+        println!("Created test.redb and inserted ('hello', 42) into 'test_table'.");
+    }
+
+    // Keep the console window open if launched by double-click
+    #[cfg(windows)]
+    {
+        use std::io::{self, Write};
+        print!("\nPress Enter to exit...");
+        io::stdout().flush().ok();
+        let _ = io::stdin().read_line(&mut String::new());
+    }
 }

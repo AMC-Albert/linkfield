@@ -2,7 +2,7 @@
 //!
 //! This test demonstrates how to access and validate table statistics and entry count.
 
-use redb::{Database, ReadableTableMetadata, TableDefinition};
+use redb::{ReadableTableMetadata, TableDefinition};
 use tempfile::NamedTempFile;
 
 const TABLE: TableDefinition<u64, u64> = TableDefinition::new("stats");

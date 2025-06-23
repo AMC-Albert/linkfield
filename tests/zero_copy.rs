@@ -3,7 +3,7 @@
 //! This test demonstrates how to use insert_reserve to perform zero-copy/in-place mutation
 //! with a value type that implements MutInPlaceValue (e.g., [u8; N]).
 
-use redb::{Database, TableDefinition};
+use redb::TableDefinition;
 use tempfile::NamedTempFile;
 
 const TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("zero_copy");
