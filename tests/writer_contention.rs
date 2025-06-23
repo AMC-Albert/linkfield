@@ -12,7 +12,10 @@ use std::time::Duration;
 
 fn temp_db() -> Database {
     let file = tempfile::NamedTempFile::new().unwrap();
-    Database::create(file.path()).unwrap()
+    redb::Builder::new()
+        .create_with_file_format_v3(true)
+        .create(file.path())
+        .unwrap()
 }
 
 #[test]

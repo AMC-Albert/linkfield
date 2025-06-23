@@ -14,7 +14,10 @@ const TABLE_BYTES: TableDefinition<&[u8], [u8; 4]> = TableDefinition::new("bytes
 
 fn temp_db() -> Database {
     let file = tempfile::NamedTempFile::new().unwrap();
-    Database::create(file.path()).unwrap()
+    redb::Builder::new()
+        .create_with_file_format_v3(true)
+        .create(file.path())
+        .unwrap()
 }
 
 #[test]

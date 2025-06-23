@@ -12,7 +12,10 @@ const TABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("zero_copy");
 fn test_zero_copy_in_place_mutation() {
     // Create a temporary database file
     let tmpfile = NamedTempFile::new().unwrap();
-    let db = Database::create(tmpfile.path()).unwrap();
+    let db = redb::Builder::new()
+        .create_with_file_format_v3(true)
+        .create(tmpfile.path())
+        .unwrap();
 
     // Start a write transaction
     let write_txn = db.begin_write().unwrap();

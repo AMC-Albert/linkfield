@@ -10,7 +10,10 @@ const TABLE: TableDefinition<u64, u64> = TableDefinition::new("stats");
 #[test]
 fn test_table_statistics() {
     let tmpfile = NamedTempFile::new().unwrap();
-    let db = Database::create(tmpfile.path()).unwrap();
+    let db = redb::Builder::new()
+        .create_with_file_format_v3(true)
+        .create(tmpfile.path())
+        .unwrap();
 
     // Insert some entries
     let write_txn = db.begin_write().unwrap();

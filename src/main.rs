@@ -1,9 +1,21 @@
-use redb::Database;
+use redb::{Builder, Database};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
+fn builder_api_demo() {
+    // Demonstrate using the Builder API to configure the database
+    let db = Builder::new()
+        .set_cache_size(8 * 1024 * 1024) // 8 MB cache
+        .create("mydb_builder_demo.redb")
+        .expect("Failed to create database with builder");
+    println!("Database created with custom builder options: 8MB cache");
+    // You can open tables and use the db as normal here
+}
+
 fn main() {
+    builder_api_demo();
+
     let db = Arc::new(
         Database::create("mydb_writer_contention.redb").expect("Failed to create database"),
     );
