@@ -1,6 +1,21 @@
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
+use tracing::{info, info_span};
+use windows::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    RegCloseKey, RegCreateKeyExW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+};
+use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
+use windows::core::PCWSTR;
+
+fn to_wide(s: &str) -> Vec<u16> {
+    OsStr::new(s).encode_wide().chain(Some(0)).collect()
+}
+
 #[cfg(windows)]
 pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
-    use windows::Win32::System::Registry::HKEY_CURRENT_USER;
+    let span = info_span!("register_redb_extension");
+    let _enter = span.enter();
 
     let exe_path = std::env::current_exe()?;
     let exe_path_str = exe_path
@@ -29,17 +44,13 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
     );
     notify_shell_assoc_changed();
     println!(".redb extension registered to {exe_path_str}");
+    info!(exe_path = %exe_path_str, "Registered .redb extension");
     Ok(())
 }
 
 fn set_registry_value(hkey: windows::Win32::System::Registry::HKEY, path: &str, value: &str) {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::System::Registry::{
-        KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW,
-        RegSetValueExW,
-    };
-    use windows::core::PCWSTR;
+    let span = info_span!("set_registry_value", path = path, value = value);
+    let _enter = span.enter();
     let to_wide = |s: &str| {
         OsStr::new(s)
             .encode_wide()
@@ -76,7 +87,8 @@ fn set_registry_value(hkey: windows::Win32::System::Registry::HKEY, path: &str, 
 }
 
 fn notify_shell_assoc_changed() {
-    use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
+    let span = info_span!("notify_shell_assoc_changed");
+    let _enter = span.enter();
     unsafe {
         SHChangeNotify(
             SHCNE_ASSOCCHANGED,
@@ -89,16 +101,8 @@ fn notify_shell_assoc_changed() {
 
 #[cfg(windows)]
 pub fn is_redb_registered() -> bool {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
-    };
-    use windows::core::PCWSTR;
-
-    fn to_wide(s: &str) -> Vec<u16> {
-        OsStr::new(s).encode_wide().chain(Some(0)).collect()
-    }
+    let span = info_span!("is_redb_registered");
+    let _enter = span.enter();
 
     let prog_id = "Linkfield.redb";
     let hkcu = HKEY_CURRENT_USER;

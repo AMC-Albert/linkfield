@@ -5,6 +5,7 @@ use crate::move_heuristics::{FileEventKind, MoveHeuristics, make_file_event};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tracing::{info, info_span};
 
 pub fn start_watcher<P: AsRef<Path>>(
     watch_path: P,
@@ -12,12 +13,15 @@ pub fn start_watcher<P: AsRef<Path>>(
     heuristics: Arc<Mutex<MoveHeuristics>>,
 ) {
     let watch_path = watch_path.as_ref().to_path_buf();
-    println!("[Watcher] Watching directory: {}", watch_path.display());
-    println!("[Watcher] Initializing watcher in background thread...");
+    let watcher_span = info_span!("start_watcher", path = %watch_path.display());
+    let _watcher_enter = watcher_span.enter();
+    info!("Watching directory: {}", watch_path.display());
+    info!("Initializing watcher in background thread...");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (tx, rx) = std::sync::mpsc::channel();
     let heuristics_thread = heuristics;
     let file_cache_thread = file_cache;
+    let watcher_setup_start = std::time::Instant::now();
     std::thread::spawn(move || {
         use std::collections::HashSet;
         let mut recently_moved: HashSet<std::path::PathBuf> = HashSet::new();
@@ -25,7 +29,7 @@ pub fn start_watcher<P: AsRef<Path>>(
             match notify_debouncer_full::new_debouncer(Duration::from_millis(500), None, tx) {
                 Ok(d) => d,
                 Err(e) => {
-                    eprintln!("[Watcher] Failed to create debouncer: {e}");
+                    tracing::error!("Failed to create debouncer: {e}");
                     return;
                 }
             };
@@ -36,15 +40,16 @@ pub fn start_watcher<P: AsRef<Path>>(
             )
             .map_err(std::io::Error::other)
         {
-            eprintln!("[Watcher] Failed to start watcher: {e}");
+            tracing::error!("Failed to start watcher: {e}");
             return;
         }
         // Signal ready after watcher is set up
         if ready_tx.send(()).is_err() {
-            eprintln!("[Watcher] Failed to signal ready");
+            tracing::error!("Failed to signal ready");
             return;
         }
-        println!("[WatcherThread] Event loop started");
+        let setup_elapsed = watcher_setup_start.elapsed();
+        info!("[WatcherThread] Event loop started (setup took {:.2?})", setup_elapsed);
         for result in rx {
             match result {
                 Ok(events) => {
@@ -57,15 +62,15 @@ pub fn start_watcher<P: AsRef<Path>>(
                         );
                     }
                 }
-                Err(e) => println!("[Watcher] Error: {e:?}"),
+                Err(e) => tracing::warn!("Watcher error: {e:?}"),
             }
         }
     });
     if let Err(e) = ready_rx.recv() {
-        eprintln!("[Watcher] Watcher thread failed to initialize: {e}");
+        tracing::error!("Watcher thread failed to initialize: {e}");
         return;
     }
-    println!("[Watcher] Ready. Try renaming, creating, or deleting files in this directory.");
+    info!("Watcher ready. Try renaming, creating, or deleting files in this directory.");
 }
 
 fn handle_remove_event(

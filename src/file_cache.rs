@@ -88,19 +88,22 @@ impl FileCache {
     }
     /// Scan a directory recursively and return a map of all files (does not update cache or db)
     pub fn scan_dir_collect(dir: &Path) -> HashMap<PathBuf, FileMeta> {
-        println!("[FileCache] scan_dir_collect: {}", dir.display());
+        let scan_span = tracing::info_span!("scan_dir_collect", dir = %dir.display());
+        let _scan_enter = scan_span.enter();
+        tracing::info!("scan_dir_collect: {}", dir.display());
         if let Err(e) = std::io::stdout().flush() {
-            eprintln!("[FileCache] Failed to flush stdout: {e}");
+            tracing::warn!(error = %e, "Failed to flush stdout");
         }
         let counter = Arc::new(AtomicUsize::new(0));
         let files = Self::collect_files_parallel_progress(dir, 0, &counter);
         // Print final progress
+        tracing::info!(count = counter.load(Ordering::Relaxed), "Scanned files");
         print!(
             "\r[FileCache] Scanned {} files.\n",
             counter.load(Ordering::Relaxed)
         );
         if let Err(e) = std::io::stdout().flush() {
-            eprintln!("[FileCache] Failed to flush stdout: {e}");
+            tracing::warn!(error = %e, "Failed to flush stdout");
         }
         files.into_iter().collect()
     }
@@ -110,10 +113,12 @@ impl FileCache {
         counter: &Arc<AtomicUsize>,
     ) -> Vec<(PathBuf, FileMeta)> {
         use rayon::iter::ParallelBridge;
+        let span = tracing::info_span!("collect_files_parallel_progress", dir = %dir.display());
+        let _enter = span.enter();
         let entries = match fs::read_dir(dir) {
             Ok(e) => e.par_bridge().filter_map(Result::ok).collect::<Vec<_>>(),
             Err(e) => {
-                println!("[FileCache] Error reading dir {}: {e}", dir.display());
+                tracing::warn!(error = %e, dir = %dir.display(), "Error reading dir");
                 return Vec::new();
             }
         };
@@ -125,10 +130,10 @@ impl FileCache {
             .filter_map(|entry| {
                 let path = entry.path();
                 let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
-                if count % 100 == 0 {
+                if count % 500 == 0 {
                     print!("\r[FileCache] Scanning... {count} files");
                     if let Err(e) = std::io::stdout().flush() {
-                        eprintln!("[FileCache] Failed to flush stdout: {e}");
+                        tracing::warn!(error = %e, "Failed to flush stdout");
                     }
                 }
                 FileMeta::from_path(&path).map(|meta| (path, meta))
