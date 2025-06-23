@@ -5,10 +5,14 @@ use std::time::{Instant, SystemTime};
 
 #[derive(Debug, Clone)]
 pub struct FileMeta {
+    #[allow(dead_code)]
     pub path: PathBuf,
     pub size: u64,
+    #[allow(dead_code)]
     pub modified: Option<SystemTime>,
+    #[allow(dead_code)]
     pub created: Option<SystemTime>,
+    #[allow(dead_code)]
     pub extension: Option<String>,
 }
 
@@ -80,6 +84,7 @@ impl FileCache {
     }
 
     /// Get all cached files
+    #[allow(dead_code)]
     pub fn all_files(&self) -> impl Iterator<Item = &FileMeta> {
         self.files.values()
     }

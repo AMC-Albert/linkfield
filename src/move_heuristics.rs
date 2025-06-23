@@ -1,15 +1,16 @@
 use std::collections::VecDeque;
-use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+use crate::file_cache::FileMeta;
 
 #[derive(Debug, Clone)]
 pub struct FileEvent {
     pub path: PathBuf,
+    #[allow(dead_code)]
     pub kind: FileEventKind,
+    pub meta: Option<FileMeta>,
     pub time: Instant,
-    pub size: Option<u64>,
-    pub metadata: Option<fs::Metadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +63,7 @@ impl MoveHeuristics {
                     to: create.clone(),
                     score,
                 };
-                if best.as_ref().map_or(true, |b| score > b.score) {
+                if best.as_ref().is_none_or(|b| score > b.score) {
                     best = Some(candidate);
                 }
             }
@@ -89,12 +90,12 @@ impl MoveHeuristics {
 
 /// Score a Remove/Create pair for likelihood of being a move
 pub fn score_pair(remove: &FileEvent, create: &FileEvent) -> f64 {
-    let mut score = 0.0;
+    let mut score: f64 = 0.0;
     // File size match is strong evidence
-    if let (Some(rs), Some(cs)) = (remove.size, create.size) {
-        if rs == cs && rs > 0 {
+    if let (Some(rm), Some(cm)) = (remove.meta.as_ref(), create.meta.as_ref()) {
+        if rm.size == cm.size && rm.size > 0 {
             score += 0.7;
-        } else if (rs as i64 - cs as i64).abs() < 16 {
+        } else if (rm.size as i64 - cm.size as i64).abs() < 16 {
             score += 0.4;
         }
     }
@@ -113,8 +114,8 @@ pub fn score_pair(remove: &FileEvent, create: &FileEvent) -> f64 {
         }
     }
     // Timestamps (if available)
-    if let (Some(rm), Some(cm)) = (&remove.metadata, &create.metadata) {
-        if let (Ok(rmt), Ok(cmt)) = (rm.modified(), cm.modified()) {
+    if let (Some(rm), Some(cm)) = (remove.meta.as_ref(), create.meta.as_ref()) {
+        if let (Some(rmt), Some(cmt)) = (rm.modified, cm.modified) {
             if (rmt.duration_since(cmt).unwrap_or_default().as_secs() < 2)
                 || (cmt.duration_since(rmt).unwrap_or_default().as_secs() < 2)
             {
@@ -122,19 +123,15 @@ pub fn score_pair(remove: &FileEvent, create: &FileEvent) -> f64 {
             }
         }
     }
-    let score = (score as f64).min(1.0f64);
-    score
+    score.min(1.0f64)
 }
 
 /// Helper to create a FileEvent from a path and kind
-pub fn make_file_event(path: PathBuf, kind: FileEventKind) -> FileEvent {
-    let metadata = fs::metadata(&path).ok();
-    let size = metadata.as_ref().map(|m| m.len());
+pub fn make_file_event(path: PathBuf, kind: FileEventKind, meta: Option<FileMeta>) -> FileEvent {
     FileEvent {
         path,
         kind,
+        meta,
         time: Instant::now(),
-        size,
-        metadata,
     }
 }
