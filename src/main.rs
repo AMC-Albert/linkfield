@@ -1,3 +1,8 @@
+#![warn(clippy::pedantic)]
+#![warn(clippy::nursery)]
+#![warn(clippy::unwrap_used)]
+#![warn(clippy::expect_used)]
+
 use redb::Builder;
 use std::io::Write;
 use std::path::Path;
@@ -147,7 +152,7 @@ fn start_watcher<P: AsRef<Path>>(
     Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     {
         use windows_registry::{is_redb_registered, register_redb_extension};
@@ -158,7 +163,7 @@ fn main() {
         }
     }
     println!("[main] Starting linkfield");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     let args: Vec<String> = std::env::args().collect();
     // Robustly determine database file to open and directory to watch
     let (db_path_buf, watch_root_buf) = if args.len() > 1 {
@@ -188,25 +193,37 @@ fn main() {
         "[main] db_path: {:?}, watch_root: {:?}",
         db_path, watch_root
     );
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     let db = if db_path.exists() {
         Builder::new()
             .create_with_file_format_v3(true)
             .open(db_path)
-            .expect("Failed to open redb file")
+            .map_err(|e| {
+                eprintln!("Failed to open redb file: {e}");
+                e
+            })?
     } else {
         Builder::new()
             .create_with_file_format_v3(true)
             .create(db_path)
-            .expect("Failed to create redb file")
+            .map_err(|e| {
+                eprintln!("Failed to create redb file: {e}");
+                e
+            })?
     };
     println!("[main] Opened/created redb file");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     println!("[main] Ensuring file_cache table exists...");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     // Ensure the file_cache table exists (open_table creates if missing)
     {
-        let write_txn = db.begin_write().expect("Failed to begin write txn");
+        let write_txn = match db.begin_write() {
+            Ok(txn) => txn,
+            Err(e) => {
+                eprintln!("[main] ERROR: failed to begin write txn: {e}");
+                return Err(Box::new(e));
+            }
+        };
         match write_txn.open_table(file_cache::FILE_CACHE_TABLE) {
             Ok(_) => println!("[main] file_cache table opened/created successfully"),
             Err(e) => {
@@ -220,38 +237,50 @@ fn main() {
         }
     }
     println!("[main] file_cache table ready");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     let file_cache = Arc::new(Mutex::new(FileCache::with_redb(db)));
     let heuristics = Arc::new(Mutex::new(MoveHeuristics::new(Duration::from_secs(5))));
     println!("[main] Created FileCache and Heuristics");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
     // Load cache from redb BEFORE first scan_dir
-    file_cache.lock().unwrap().load_from_redb();
+    if let Ok(mut cache) = file_cache.lock() {
+        cache.load_from_redb();
+    } else {
+        eprintln!("[main] ERROR: failed to lock file_cache for load_from_redb");
+    }
     println!("[main] Loaded file cache from redb");
     // File cache scan/logging BEFORE watcher
     println!("[main] About to scan_dir");
-    std::io::stdout().flush().unwrap();
-    file_cache.lock().unwrap().scan_dir(watch_root);
-    println!(
-        "[FileCache] After scan_dir: {} files",
-        file_cache.lock().unwrap().all_files().count()
-    );
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
+    if let Ok(mut cache) = file_cache.lock() {
+        cache.scan_dir(watch_root);
+        println!(
+            "[FileCache] After scan_dir: {} files",
+            cache.all_files().count()
+        );
+    } else {
+        eprintln!("[main] ERROR: failed to lock file_cache for scan_dir");
+    }
+    std::io::stdout().flush()?;
     println!("[main] About to start watcher");
-    std::io::stdout().flush().unwrap();
-    start_watcher(watch_root, file_cache.clone(), heuristics).expect("Failed to start watcher");
+    std::io::stdout().flush()?;
+    start_watcher(watch_root, file_cache.clone(), heuristics).map_err(|e| {
+        eprintln!("Failed to start watcher: {e}");
+        e
+    })?;
     println!("[main] Started watcher");
-    std::io::stdout().flush().unwrap();
+    std::io::stdout().flush()?;
 
     // Print file cache stats after initial scan
-    {
-        let cache = file_cache.lock().unwrap();
+    if let Ok(cache) = file_cache.lock() {
         let count = cache.all_files().count();
         let total_size: u64 = cache.all_files().map(|m| m.size).sum();
         println!(
             "[FileCache] Initial files cached: {} (total size: {} bytes)",
             count, total_size
         );
+    } else {
+        eprintln!("[main] ERROR: failed to lock file_cache for stats");
     }
 
     // Block main thread to keep process alive (cross-platform)
@@ -263,8 +292,13 @@ fn main() {
         let mut handle = stdin.lock();
         let mut buf = [0u8; 1];
         loop {
-            if handle.read(&mut buf).is_ok() && buf[0] == b'\n' {
-                break;
+            match handle.read(&mut buf) {
+                Ok(n) if n > 0 && buf[0] == b'\n' => break,
+                Ok(_) => (),
+                Err(e) => {
+                    eprintln!("[main] ERROR: stdin read failed: {e}");
+                    break;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
@@ -277,10 +311,16 @@ fn main() {
         let mut handle = stdin.lock();
         let mut buf = [0u8; 1];
         loop {
-            if handle.read(&mut buf).is_ok() && buf[0] == b'\n' {
-                break;
+            match handle.read(&mut buf) {
+                Ok(n) if n > 0 && buf[0] == b'\n' => break,
+                Ok(_) => (),
+                Err(e) => {
+                    eprintln!("[main] ERROR: stdin read failed: {e}");
+                    break;
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
+    Ok(())
 }
