@@ -1,4 +1,4 @@
-//! Integration test for zero-copy/in-place mutation using redb's insert_reserve and MutInPlaceValue.
+//! Demonstration test for zero-copy/in-place mutation using redb's insert_reserve and MutInPlaceValue.
 //!
 //! This test demonstrates how to use insert_reserve to perform zero-copy/in-place mutation
 //! with a value type that implements MutInPlaceValue (e.g., [u8; N]).
