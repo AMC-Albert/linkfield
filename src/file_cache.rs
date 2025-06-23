@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 
 pub const FILE_CACHE_TABLE: redb::TableDefinition<&str, &[u8]> =
@@ -74,10 +76,53 @@ impl FileCache {
     pub fn scan_dir_collect(dir: &Path) -> HashMap<PathBuf, FileMeta> {
         println!("[FileCache] scan_dir_collect: {:?}", dir);
         std::io::stdout().flush().unwrap();
-        let files = Self::collect_files_parallel(dir, 0);
+        let counter = Arc::new(AtomicUsize::new(0));
+        let files = Self::collect_files_parallel_progress(dir, 0, counter.clone());
+        // Print final progress
+        print!(
+            "\r[FileCache] Scanned {} files.\n",
+            counter.load(Ordering::Relaxed)
+        );
+        std::io::stdout().flush().unwrap();
         files.into_iter().collect()
     }
-
+    fn collect_files_parallel_progress(
+        dir: &Path,
+        _depth: usize,
+        counter: Arc<AtomicUsize>,
+    ) -> Vec<(PathBuf, FileMeta)> {
+        use rayon::iter::ParallelBridge;
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e.par_bridge().filter_map(Result::ok).collect::<Vec<_>>(),
+            Err(e) => {
+                println!("[FileCache] Error reading dir {:?}: {}", dir, e);
+                return Vec::new();
+            }
+        };
+        let (dirs, files): (Vec<_>, Vec<_>) = entries
+            .into_par_iter()
+            .partition(|entry| entry.path().is_dir());
+        let mut results: Vec<(PathBuf, FileMeta)> = files
+            .into_par_iter()
+            .filter_map(|entry| {
+                let path = entry.path();
+                let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                if count % 100 == 0 {
+                    print!("\r[FileCache] Scanning... {} files", count);
+                    std::io::stdout().flush().unwrap();
+                }
+                FileMeta::from_path(&path).map(|meta| (path, meta))
+            })
+            .collect();
+        let mut sub_results: Vec<(PathBuf, FileMeta)> = dirs
+            .into_par_iter()
+            .flat_map_iter(|entry| {
+                Self::collect_files_parallel_progress(&entry.path(), 0, counter.clone())
+            })
+            .collect();
+        results.append(&mut sub_results);
+        results
+    }
     /// Diff the new scan with the current cache, and atomically update only changes in memory and redb (batched)
     pub fn diff_and_update(&mut self, new_files: HashMap<PathBuf, FileMeta>) {
         let mut added = 0;

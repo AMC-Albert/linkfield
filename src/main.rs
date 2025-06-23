@@ -17,19 +17,25 @@ fn start_watcher<P: AsRef<Path>>(
 ) -> std::io::Result<()> {
     let watch_path = watch_path.as_ref().to_path_buf();
     println!("[Watcher] Watching directory: {:?}", watch_path);
+    println!("[Watcher] Initializing watcher in background thread...");
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = notify_debouncer_full::new_debouncer(Duration::from_millis(500), None, tx)
-        .map_err(std::io::Error::other)?;
-    debouncer
-        .watch(
-            &watch_path,
-            notify_debouncer_full::notify::RecursiveMode::Recursive,
-        )
-        .map_err(std::io::Error::other)?;
-
     let heuristics_thread = heuristics.clone();
     let file_cache_thread = file_cache.clone();
     std::thread::spawn(move || {
+        let mut debouncer =
+            notify_debouncer_full::new_debouncer(Duration::from_millis(500), None, tx)
+                .map_err(std::io::Error::other)
+                .expect("Failed to create debouncer");
+        debouncer
+            .watch(
+                &watch_path,
+                notify_debouncer_full::notify::RecursiveMode::Recursive,
+            )
+            .map_err(std::io::Error::other)
+            .expect("Failed to start watcher");
+        // Signal ready after watcher is set up
+        ready_tx.send(()).ok();
         println!("[WatcherThread] Event loop started");
         for result in rx {
             match result {
@@ -102,8 +108,11 @@ fn start_watcher<P: AsRef<Path>>(
             }
         }
     });
+    // Wait for watcher to be ready
+    ready_rx
+        .recv()
+        .expect("Watcher thread failed to initialize");
     println!("[Watcher] Ready. Try renaming, creating, or deleting files in this directory.");
-    Box::leak(Box::new(debouncer));
     Ok(())
 }
 
