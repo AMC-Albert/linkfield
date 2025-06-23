@@ -96,7 +96,7 @@ pub fn score_pair(remove: &FileEvent, create: &FileEvent) -> f64 {
     if let (Some(rm), Some(cm)) = (remove.meta.as_ref(), create.meta.as_ref()) {
         if rm.size == cm.size && rm.size > 0 {
             score += 0.7;
-        } else if (rm.size as i64 - cm.size as i64).abs() < 16 {
+        } else if rm.size.abs_diff(cm.size) < 16 {
             score += 0.4;
         }
     }

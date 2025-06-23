@@ -1,134 +1,83 @@
 #[cfg(windows)]
 pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-        RegCreateKeyExW, RegSetValueExW,
-    };
-    use windows::core::PCWSTR;
+    use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 
-    fn to_wide(s: &str) -> Vec<u16> {
-        OsStr::new(s).encode_wide().chain(Some(0)).collect()
-    }
-
-    let exe_path = std::env::current_exe()?.to_str().unwrap().to_string();
+    let exe_path = std::env::current_exe()?;
+    let exe_path_str = exe_path
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("Executable path contains invalid UTF-8"))?
+        .to_string();
     let prog_id = "Linkfield.redb";
     let friendly_name = "Linkfield Database File";
     let hkcu = HKEY_CURRENT_USER;
 
+    // .redb extension
+    set_registry_value(hkcu, r"Software\Classes\.redb", prog_id);
+    // ProgID
+    set_registry_value(hkcu, &format!(r"Software\Classes\{prog_id}"), friendly_name);
+    // shell\open\command
+    set_registry_value(
+        hkcu,
+        &format!(r"Software\Classes\{prog_id}\shell\open\command"),
+        &format!("\"{exe_path_str}\" \"%1\""),
+    );
+    // DefaultIcon
+    set_registry_value(
+        hkcu,
+        &format!(r"Software\Classes\{prog_id}\DefaultIcon"),
+        &format!("\"{exe_path_str}\",0"),
+    );
+    notify_shell_assoc_changed();
+    println!(".redb extension registered to {exe_path_str}");
+    Ok(())
+}
+
+fn set_registry_value(hkey: windows::Win32::System::Registry::HKEY, path: &str, value: &str) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::System::Registry::{
+        KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW,
+        RegSetValueExW,
+    };
+    use windows::core::PCWSTR;
+    let to_wide = |s: &str| {
+        OsStr::new(s)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<u16>>()
+    };
     unsafe {
-        // .redb extension
-        let key_path = to_wide(r"Software\Classes\.redb");
-        let mut hkey = HKEY::default();
+        let key_path = to_wide(path);
+        let mut hkey_out = windows::Win32::System::Registry::HKEY::default();
         let _ = RegCreateKeyExW(
-            hkcu,
+            hkey,
             PCWSTR(key_path.as_ptr()),
             None,
             None,
             REG_OPTION_NON_VOLATILE,
             KEY_SET_VALUE,
             None,
-            &mut hkey,
+            &mut hkey_out,
             None,
         );
-        let prog_id_wide = to_wide(prog_id);
+        let value_wide = to_wide(value);
         let _ = RegSetValueExW(
-            hkey,
+            hkey_out,
             None,
             None,
             REG_SZ,
             Some(std::slice::from_raw_parts(
-                prog_id_wide.as_ptr().cast::<u8>(),
-                prog_id_wide.len() * 2,
+                value_wide.as_ptr().cast::<u8>(),
+                value_wide.len() * 2,
             )),
         );
-        let _ = RegCloseKey(hkey);
+        let _ = RegCloseKey(hkey_out);
+    }
+}
 
-        // ProgID
-        let progid_path = to_wide(&format!(r"Software\Classes\{prog_id}"));
-        let mut hkey = HKEY::default();
-        let _ = RegCreateKeyExW(
-            hkcu,
-            PCWSTR(progid_path.as_ptr()),
-            None,
-            None,
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            None,
-            &mut hkey,
-            None,
-        );
-        let friendly_name_wide = to_wide(friendly_name);
-        let _ = RegSetValueExW(
-            hkey,
-            None,
-            None,
-            REG_SZ,
-            Some(std::slice::from_raw_parts(
-                friendly_name_wide.as_ptr().cast::<u8>(),
-                friendly_name_wide.len() * 2,
-            )),
-        );
-
-        // shell\open\command
-        let shell_path = to_wide(r"shell\open\command");
-        let mut shell_key = HKEY::default();
-        let _ = RegCreateKeyExW(
-            hkey,
-            PCWSTR(shell_path.as_ptr()),
-            None,
-            None,
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            None,
-            &mut shell_key,
-            None,
-        );
-        let command = format!("\"{exe_path}\" \"%1\"");
-        let command_wide = to_wide(&command);
-        let _ = RegSetValueExW(
-            shell_key,
-            None,
-            None,
-            REG_SZ,
-            Some(std::slice::from_raw_parts(
-                command_wide.as_ptr().cast::<u8>(),
-                command_wide.len() * 2,
-            )),
-        );
-        let _ = RegCloseKey(shell_key);
-
-        // DefaultIcon
-        let icon_path = to_wide("DefaultIcon");
-        let mut icon_key = HKEY::default();
-        let _ = RegCreateKeyExW(
-            hkey,
-            PCWSTR(icon_path.as_ptr()),
-            None,
-            None,
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            None,
-            &mut icon_key,
-            None,
-        );
-        let icon_val = format!("\"{exe_path}\",0");
-        let icon_val_wide = to_wide(&icon_val);
-        let _ = RegSetValueExW(
-            icon_key,
-            None,
-            None,
-            REG_SZ,
-            Some(std::slice::from_raw_parts(
-                icon_val_wide.as_ptr().cast::<u8>(),
-                icon_val_wide.len() * 2,
-            )),
-        );
-        let _ = RegCloseKey(icon_key);
-        let _ = RegCloseKey(hkey);
-        // Notify Windows Explorer to refresh icons and associations
-        use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
+fn notify_shell_assoc_changed() {
+    use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
+    unsafe {
         SHChangeNotify(
             SHCNE_ASSOCCHANGED,
             SHCNF_IDLIST,
@@ -136,8 +85,6 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             Some(std::ptr::null()),
         );
     }
-    println!(".redb extension registered to {exe_path}");
-    Ok(())
 }
 
 #[cfg(windows)]
@@ -168,7 +115,7 @@ pub fn is_redb_registered() -> bool {
         .is_ok()
         {
             let mut buf = [0u16; 128];
-            let mut buf_len = (buf.len() * 2) as u32;
+            let mut buf_len = (buf.len() * 2).try_into().unwrap_or(u32::MAX);
             if RegQueryValueExW(
                 hkey,
                 None,
@@ -179,7 +126,8 @@ pub fn is_redb_registered() -> bool {
             )
             .is_ok()
             {
-                let val = String::from_utf16_lossy(&buf[..(buf_len as usize / 2) - 1]);
+                let val =
+                    String::from_utf16_lossy(&buf[..(buf_len as usize / 2).saturating_sub(1)]);
                 let _ = RegCloseKey(hkey);
                 return val == prog_id;
             }

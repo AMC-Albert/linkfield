@@ -16,7 +16,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let (db_path_buf, watch_root_buf) = args::parse_args();
     let db_path = db_path_buf.as_path();
     let watch_root = watch_root_buf.as_path();
-    println!("[main] db_path: {db_path:?}, watch_root: {watch_root:?}");
+    println!(
+        "[main] db_path: {}, watch_root: {}",
+        db_path.display(),
+        watch_root.display()
+    );
     std::io::stdout().flush()?;
     let db = db::open_or_create_db(db_path)?;
     println!("[main] Opened/created redb file");
@@ -50,7 +54,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::io::stdout().flush()?;
     println!("[main] About to start watcher");
     std::io::stdout().flush()?;
-    watcher::start_watcher(watch_root, file_cache.clone(), heuristics)?;
+    watcher::start_watcher(watch_root, file_cache.clone(), heuristics);
     println!("[main] Started watcher");
     std::io::stdout().flush()?;
     if let Ok(cache) = file_cache.lock() {

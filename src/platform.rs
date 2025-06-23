@@ -17,10 +17,13 @@ pub fn wait_for_exit() {
     use std::io::{self, Read};
     println!("\nPress Enter to exit...");
     let stdin = io::stdin();
-    let mut handle = stdin.lock();
     let mut buf = [0u8; 1];
     loop {
-        match handle.read(&mut buf) {
+        let read_result = {
+            let mut handle = stdin.lock();
+            handle.read(&mut buf)
+        };
+        match read_result {
             Ok(n) if n > 0 && buf[0] == b'\n' => break,
             Ok(_) => (),
             Err(e) => {

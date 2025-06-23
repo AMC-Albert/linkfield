@@ -9,7 +9,9 @@ pub fn parse_args() -> (PathBuf, PathBuf) {
         if arg_path.is_file() {
             (
                 arg_path.to_path_buf(),
-                arg_path.parent().unwrap_or(Path::new(".")).to_path_buf(),
+                arg_path
+                    .parent()
+                    .map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf),
             )
         } else if arg_path.is_dir() {
             (arg_path.join("linkfield.redb"), arg_path.to_path_buf())
