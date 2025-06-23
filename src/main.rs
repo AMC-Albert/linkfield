@@ -23,6 +23,8 @@ fn start_watcher<P: AsRef<Path>>(
     let heuristics_thread = heuristics.clone();
     let file_cache_thread = file_cache.clone();
     std::thread::spawn(move || {
+        use std::collections::HashSet;
+        let mut recently_moved: HashSet<std::path::PathBuf> = HashSet::new();
         let mut debouncer =
             notify_debouncer_full::new_debouncer(Duration::from_millis(500), None, tx)
                 .map_err(std::io::Error::other)
@@ -41,7 +43,6 @@ fn start_watcher<P: AsRef<Path>>(
             match result {
                 Ok(events) => {
                     for event in events {
-                        println!("[WatcherThread] Received event: {:?}", event);
                         match &event.event.kind {
                             notify_debouncer_full::notify::event::EventKind::Remove(_) => {
                                 let path = event.event.paths.first().cloned();
@@ -53,7 +54,8 @@ fn start_watcher<P: AsRef<Path>>(
                                     heuristics_thread.lock().unwrap().add_remove(file_event);
                                     file_cache_thread.lock().unwrap().remove_file(&path);
                                 }
-                                println!("[Watcher] Remove: {:?}", event.event.paths);
+                                // Suppress Remove log for move detection
+                                continue;
                             }
                             notify_debouncer_full::notify::event::EventKind::Create(_) => {
                                 let path = event.event.paths.first().cloned();
@@ -70,6 +72,8 @@ fn start_watcher<P: AsRef<Path>>(
                                             "[Heuristics] Move detected: {:?} -> {:?} (score: {:.2})",
                                             pair.from.path, pair.to.path, pair.score
                                         );
+                                        recently_moved.insert(pair.to.path.clone());
+                                        continue;
                                     } else {
                                         println!("[Watcher] Create: {:?}", path);
                                     }
@@ -79,26 +83,53 @@ fn start_watcher<P: AsRef<Path>>(
                                 notify_debouncer_full::notify::event::ModifyKind::Name(_),
                             ) => {
                                 let paths = &event.event.paths;
-                                if paths.len() == 2 {
-                                    let from = &paths[0];
-                                    let to = &paths[1];
-                                    let old_parent = from.parent();
-                                    let new_parent = to.parent();
-                                    if old_parent != new_parent {
-                                        println!("[Watcher] Move: {:?} -> {:?}", from, to);
-                                    } else {
-                                        println!("[Watcher] Rename: {:?} -> {:?}", from, to);
+                                match paths.len() {
+                                    2 => {
+                                        let from = &paths[0];
+                                        let to = &paths[1];
+                                        let old_parent = from.parent();
+                                        let new_parent = to.parent();
+                                        if old_parent != new_parent {
+                                            println!("[Watcher] Move: {:?} -> {:?}", from, to);
+                                        } else {
+                                            println!("[Watcher] Rename: {:?} -> {:?}", from, to);
+                                        }
+                                        file_cache_thread.lock().unwrap().remove_file(from);
+                                        file_cache_thread.lock().unwrap().update_file(to);
+                                        recently_moved.insert(to.clone());
                                     }
-                                    file_cache_thread.lock().unwrap().remove_file(from);
-                                    file_cache_thread.lock().unwrap().update_file(to);
-                                } else {
-                                    println!(
-                                        "[Watcher] Rename/Move event with unexpected paths: {:?}",
-                                        paths
-                                    );
+                                    1 => {
+                                        println!(
+                                            "[Watcher] Rename/Move event (single path): {:?}",
+                                            paths[0]
+                                        );
+                                    }
+                                    _ => {
+                                        println!(
+                                            "[Watcher] Rename/Move event with unexpected paths: {:?}",
+                                            paths
+                                        );
+                                    }
                                 }
+                                // Suppress generic event print for all rename/move
+                                continue;
                             }
                             _ => {
+                                // Only print non-rename/move events, and suppress Modify(Any) for directory, .redb, or recently moved file
+                                let paths = &event.event.paths;
+                                let is_dir_event = paths.iter().any(|p| {
+                                    p.ends_with("linkfield.redb")
+                                        || std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
+                                        || recently_moved.remove(p)
+                                });
+                                if let notify_debouncer_full::notify::event::EventKind::Modify(
+                                    notify_debouncer_full::notify::event::ModifyKind::Any,
+                                ) = &event.event.kind
+                                {
+                                    if is_dir_event {
+                                        continue;
+                                    }
+                                }
                                 println!("[Watcher] Event: {:?}", event);
                             }
                         }

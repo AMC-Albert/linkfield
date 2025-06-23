@@ -52,10 +52,11 @@ impl MoveHeuristics {
         let mut best: Option<MoveCandidate> = None;
         for remove in self.remove_events.iter() {
             let score = score_pair(remove, create);
-            eprintln!(
-                "[Heuristics] Score for Remove({:?}) <-> Create({:?}): {:.2}",
-                remove.path, create.path, score
-            );
+            // Suppress noisy score log
+            // eprintln!(
+            //     "[Heuristics] Score for Remove({:?}) <-> Create({:?}): {:.2}",
+            //     remove.path, create.path, score
+            // );
             if score > 0.5 {
                 // Good enough match
                 let candidate = MoveCandidate {
