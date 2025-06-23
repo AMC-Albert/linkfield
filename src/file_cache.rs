@@ -243,32 +243,6 @@ impl FileCache {
             }
         }
     }
-    fn collect_files_parallel(dir: &Path, _depth: usize) -> Vec<(PathBuf, FileMeta)> {
-        use rayon::iter::ParallelBridge;
-        let entries = match fs::read_dir(dir) {
-            Ok(e) => e.par_bridge().filter_map(Result::ok).collect::<Vec<_>>(),
-            Err(e) => {
-                println!("[FileCache] Error reading dir {:?}: {}", dir, e);
-                return Vec::new();
-            }
-        };
-        let (dirs, files): (Vec<_>, Vec<_>) = entries
-            .into_par_iter()
-            .partition(|entry| entry.path().is_dir());
-        let mut results: Vec<(PathBuf, FileMeta)> = files
-            .into_par_iter()
-            .filter_map(|entry| {
-                let path = entry.path();
-                FileMeta::from_path(&path).map(|meta| (path, meta))
-            })
-            .collect();
-        let mut sub_results: Vec<(PathBuf, FileMeta)> = dirs
-            .into_par_iter()
-            .flat_map_iter(|entry| Self::collect_files_parallel(&entry.path(), 0))
-            .collect();
-        results.append(&mut sub_results);
-        results
-    }
     #[allow(dead_code)]
     fn add_dir(&mut self, dir: &Path, depth: usize) {
         if depth > 10 {
