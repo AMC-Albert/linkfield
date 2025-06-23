@@ -204,20 +204,15 @@ fn main() {
     let heuristics = Arc::new(Mutex::new(MoveHeuristics::new(Duration::from_secs(5))));
     println!("[main] Created FileCache and Heuristics");
     std::io::stdout().flush().unwrap();
+    // Load cache from redb BEFORE first scan_dir
+    file_cache.lock().unwrap().load_from_redb();
+    println!("[main] Loaded file cache from redb");
     // File cache scan/logging BEFORE watcher
     println!("[main] About to scan_dir");
     std::io::stdout().flush().unwrap();
     file_cache.lock().unwrap().scan_dir(watch_root);
     println!(
         "[FileCache] After scan_dir: {} files",
-        file_cache.lock().unwrap().all_files().count()
-    );
-    std::io::stdout().flush().unwrap();
-    println!("[main] About to load_from_redb");
-    std::io::stdout().flush().unwrap();
-    file_cache.lock().unwrap().load_from_redb();
-    println!(
-        "[FileCache] After load_from_redb: {} files",
         file_cache.lock().unwrap().all_files().count()
     );
     std::io::stdout().flush().unwrap();
