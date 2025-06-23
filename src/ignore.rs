@@ -34,29 +34,37 @@ impl IgnoreConfig {
     pub fn from_file_with_patterns<P: AsRef<Path>>(
         path: P,
     ) -> IgnoreConfigResult<(Self, Vec<String>)> {
-        let file = File::open(path.as_ref())?;
-        let reader = BufReader::new(file);
-        let mut builder = GitignoreBuilder::new("");
-        let mut patterns = Vec::new();
-        for line in reader.lines() {
-            let line = line?;
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
+        match File::open(path.as_ref()) {
+            Ok(file) => {
+                let reader = BufReader::new(file);
+                let mut builder = GitignoreBuilder::new("");
+                let mut patterns = Vec::new();
+                for line in reader.lines() {
+                    let line = line?;
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    builder.add_line(None, trimmed)?;
+                    patterns.push(trimmed.to_string());
+                }
+                let gitignore = builder
+                    .build()
+                    .map_err(|e| format!("Gitignore build error: {e}"))?;
+                Ok((
+                    IgnoreConfig {
+                        gitignore,
+                        patterns: patterns.clone(),
+                    },
+                    patterns,
+                ))
             }
-            builder.add_line(None, trimmed)?;
-            patterns.push(trimmed.to_string());
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File not found: treat as empty ignore config, no warning
+                Ok((IgnoreConfig::empty(), vec![]))
+            }
+            Err(e) => Err(Box::new(e)),
         }
-        let gitignore = builder
-            .build()
-            .map_err(|e| format!("Gitignore build error: {e}"))?;
-        Ok((
-            IgnoreConfig {
-                gitignore,
-                patterns: patterns.clone(),
-            },
-            patterns,
-        ))
     }
 
     /// Returns true if the given path should be ignoreped.
