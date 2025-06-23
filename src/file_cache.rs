@@ -1,8 +1,8 @@
 use bincode::{Decode, Encode, decode_from_slice, encode_to_vec};
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -40,13 +40,13 @@ impl FileMeta {
     }
     pub fn serialize(&self) -> Vec<u8> {
         encode_to_vec(self, bincode::config::standard()).unwrap_or_else(|e| {
-            eprintln!("[FileMeta] Serialization failed: {e}");
+            tracing::error!(error = %e, "Serialization failed");
             Vec::new()
         })
     }
     pub fn deserialize(bytes: &[u8]) -> Self {
         let (meta, _) = decode_from_slice(bytes, bincode::config::standard()).unwrap_or_else(|e| {
-            eprintln!("[FileMeta] Deserialization failed: {e}");
+            tracing::error!(error = %e, "Deserialization failed");
             (
                 Self {
                     path: PathBuf::new(),
@@ -91,26 +91,24 @@ impl FileCache {
         let scan_span = tracing::info_span!("scan_dir_collect", dir = %dir.display());
         let _scan_enter = scan_span.enter();
         tracing::info!("scan_dir_collect: {}", dir.display());
-        if let Err(e) = std::io::stdout().flush() {
-            tracing::warn!(error = %e, "Failed to flush stdout");
-        }
         let counter = Arc::new(AtomicUsize::new(0));
-        let files = Self::collect_files_parallel_progress(dir, 0, &counter);
-        // Print final progress
-        tracing::info!(count = counter.load(Ordering::Relaxed), "Scanned files");
-        print!(
-            "\r[FileCache] Scanned {} files.\n",
-            counter.load(Ordering::Relaxed)
-        );
-        if let Err(e) = std::io::stdout().flush() {
-            tracing::warn!(error = %e, "Failed to flush stdout");
+        // Estimate total files for progress bar (optional, can be None)
+        let pb = ProgressBar::new_spinner();
+        if let Ok(style) = ProgressStyle::with_template("{spinner:.green} Scanning files: {pos}") {
+            pb.set_style(style);
+        } else {
+            tracing::warn!("Failed to set progress bar style");
         }
+        let files = Self::collect_files_parallel_progress(dir, 0, &counter, &pb);
+        pb.finish_with_message("Scan complete");
+        tracing::info!(count = counter.load(Ordering::Relaxed), "Scanned files");
         files.into_iter().collect()
     }
     fn collect_files_parallel_progress(
         dir: &Path,
         _depth: usize,
         counter: &Arc<AtomicUsize>,
+        pb: &ProgressBar,
     ) -> Vec<(PathBuf, FileMeta)> {
         use rayon::iter::ParallelBridge;
         let span = tracing::info_span!("collect_files_parallel_progress", dir = %dir.display());
@@ -131,17 +129,16 @@ impl FileCache {
                 let path = entry.path();
                 let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 if count % 500 == 0 {
-                    print!("\r[FileCache] Scanning... {count} files");
-                    if let Err(e) = std::io::stdout().flush() {
-                        tracing::warn!(error = %e, "Failed to flush stdout");
-                    }
+                    pb.set_position(count as u64);
                 }
                 FileMeta::from_path(&path).map(|meta| (path, meta))
             })
             .collect();
         let mut sub_results: Vec<(PathBuf, FileMeta)> = dirs
             .into_par_iter()
-            .flat_map_iter(|entry| Self::collect_files_parallel_progress(&entry.path(), 0, counter))
+            .flat_map_iter(|entry| {
+                Self::collect_files_parallel_progress(&entry.path(), 0, counter, pb)
+            })
             .collect();
         results.append(&mut sub_results);
         results
@@ -187,12 +184,7 @@ impl FileCache {
         for (path, meta) in &to_add_or_update {
             self.files.insert(path.clone(), meta.clone());
         }
-        println!(
-            "[FileCache][diff] Added: {added}, Updated: {updated}, Removed: {removed}, Unchanged: {unchanged}"
-        );
-        if let Err(e) = std::io::stdout().flush() {
-            eprintln!("[FileCache] Failed to flush stdout: {e}");
-        }
+        tracing::info!(added, updated, removed, unchanged, "[FileCache][diff]");
     }
     fn update_redb_batch_commit(
         db: &redb::Database,
@@ -202,32 +194,32 @@ impl FileCache {
         let write_txn = match db.begin_write() {
             Ok(txn) => txn,
             Err(e) => {
-                eprintln!("[FileCache] Failed to begin write txn: {e}");
+                tracing::error!(error = %e, "Failed to begin write txn");
                 return;
             }
         };
         let mut table = match write_txn.open_table(FILE_CACHE_TABLE) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[FileCache] Failed to open file_cache table: {e}");
+                tracing::error!(error = %e, "Failed to open file_cache table");
                 return;
             }
         };
         for path in to_remove {
             if let Err(e) = table.remove(path.to_string_lossy().as_ref()) {
-                eprintln!("[FileCache] Failed to remove file meta: {e}");
+                tracing::error!(error = %e, path = %path.display(), "Failed to remove file meta");
             }
         }
         for (path, meta) in to_add_or_update {
             if let Err(e) =
                 table.insert(path.to_string_lossy().as_ref(), meta.serialize().as_slice())
             {
-                eprintln!("[FileCache] Failed to insert/update file meta: {e}");
+                tracing::error!(error = %e, path = %path.display(), "Failed to insert/update file meta");
             }
         }
         drop(table);
         if let Err(e) = write_txn.commit() {
-            eprintln!("[FileCache] Failed to commit batch diff update: {e}");
+            tracing::error!(error = %e, "Failed to commit batch diff update");
         }
     }
     /// Scan a directory and atomically update only changes (calls `diff_and_update`)
@@ -248,23 +240,23 @@ impl FileCache {
         let write_txn = match db.begin_write() {
             Ok(txn) => txn,
             Err(e) => {
-                eprintln!("[FileCache] Failed to begin write txn: {e}");
+                tracing::error!(error = %e, "Failed to begin write txn");
                 return;
             }
         };
         let mut table = match write_txn.open_table(FILE_CACHE_TABLE) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[FileCache] Failed to open file_cache table: {e}");
+                tracing::error!(error = %e, "Failed to open file_cache table");
                 return;
             }
         };
         if let Err(e) = table.insert(path.to_string_lossy().as_ref(), meta.serialize().as_slice()) {
-            eprintln!("[FileCache] Failed to insert/update file meta: {e}");
+            tracing::error!(error = %e, path = %path.display(), "Failed to insert/update file meta");
         }
         drop(table);
         if let Err(e) = write_txn.commit() {
-            eprintln!("[FileCache] Failed to commit update: {e}");
+            tracing::error!(error = %e, "Failed to commit update");
         }
     }
     /// Remove a file from the cache
@@ -278,23 +270,23 @@ impl FileCache {
         let write_txn = match db.begin_write() {
             Ok(txn) => txn,
             Err(e) => {
-                eprintln!("[FileCache] Failed to begin write txn: {e}");
+                tracing::error!(error = %e, "Failed to begin write txn");
                 return;
             }
         };
         let mut table = match write_txn.open_table(FILE_CACHE_TABLE) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("[FileCache] Failed to open file_cache table: {e}");
+                tracing::error!(error = %e, "Failed to open file_cache table");
                 return;
             }
         };
         if let Err(e) = table.remove(path.to_string_lossy().as_ref()) {
-            eprintln!("[FileCache] Failed to remove file meta: {e}");
+            tracing::error!(error = %e, path = %path.display(), "Failed to remove file meta");
         }
         drop(table);
         if let Err(e) = write_txn.commit() {
-            eprintln!("[FileCache] Failed to commit remove: {e}");
+            tracing::error!(error = %e, "Failed to commit remove");
         }
     }
     /// Get cached metadata for a file
@@ -312,14 +304,14 @@ impl FileCache {
             let read_txn = match db.begin_read() {
                 Ok(txn) => txn,
                 Err(e) => {
-                    eprintln!("[FileCache] Failed to begin read txn: {e}");
+                    tracing::error!(error = %e, "Failed to begin read txn");
                     return;
                 }
             };
             let table = match read_txn.open_table(FILE_CACHE_TABLE) {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("[FileCache] Failed to open file_cache table: {e}");
+                    tracing::error!(error = %e, "Failed to open file_cache table");
                     return;
                 }
             };
@@ -327,7 +319,7 @@ impl FileCache {
             let range = match table.range::<&str>(..) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[FileCache] Failed to get table range: {e}");
+                    tracing::error!(error = %e, "Failed to get table range");
                     return;
                 }
             };
@@ -339,7 +331,7 @@ impl FileCache {
                         self.files.insert(path, meta);
                     }
                     Err(e) => {
-                        eprintln!("[FileCache] Failed to read entry: {e}");
+                        tracing::error!(error = %e, "Failed to read entry");
                     }
                 }
             }
@@ -348,26 +340,17 @@ impl FileCache {
     #[allow(dead_code)]
     fn add_dir(&mut self, dir: &Path, depth: usize) {
         if depth > 10 {
-            println!(
-                "[FileCache] Max recursion depth reached at {}",
-                dir.display()
-            );
+            tracing::warn!(dir = %dir.display(), "Max recursion depth reached");
             return;
         }
-        println!("[FileCache] add_dir: {}", dir.display());
-        if let Err(e) = std::io::stdout().flush() {
-            eprintln!("[FileCache] Failed to flush stdout: {e}");
-        }
+        tracing::info!(dir = %dir.display(), "add_dir");
         match fs::read_dir(dir) {
             Ok(entries) => {
                 for entry in entries {
                     match entry {
                         Ok(entry) => {
                             let path = entry.path();
-                            println!("[FileCache] entry: {}", path.display());
-                            if let Err(e) = std::io::stdout().flush() {
-                                eprintln!("[FileCache] Failed to flush stdout: {e}");
-                            }
+                            tracing::info!(path = %path.display(), "entry");
                             if path.is_dir() {
                                 self.add_dir(&path, depth + 1);
                             } else if let Some(meta) = FileMeta::from_path(&path) {
@@ -375,13 +358,13 @@ impl FileCache {
                             }
                         }
                         Err(e) => {
-                            println!("[FileCache] Error reading entry in {}: {e}", dir.display());
+                            tracing::warn!(dir = %dir.display(), error = %e, "Error reading entry");
                         }
                     }
                 }
             }
             Err(e) => {
-                println!("[FileCache] Error reading dir {}: {e}", dir.display());
+                tracing::warn!(dir = %dir.display(), error = %e, "Error reading dir");
             }
         }
     }

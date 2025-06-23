@@ -49,7 +49,10 @@ pub fn start_watcher<P: AsRef<Path>>(
             return;
         }
         let setup_elapsed = watcher_setup_start.elapsed();
-        info!("[WatcherThread] Event loop started (setup took {:.2?})", setup_elapsed);
+        info!(
+            "[WatcherThread] Event loop started (setup took {:.2?})",
+            setup_elapsed
+        );
         for result in rx {
             match result {
                 Ok(events) => {
@@ -83,7 +86,7 @@ fn handle_remove_event(
         let meta = match file_cache_thread.lock() {
             Ok(guard) => guard.get(&path).cloned(),
             Err(e) => {
-                eprintln!("[Watcher] Failed to lock file_cache: {e}");
+                tracing::error!(error = %e, "Failed to lock file_cache");
                 None
             }
         };
@@ -91,12 +94,12 @@ fn handle_remove_event(
         if let Ok(mut heuristics) = heuristics_thread.lock() {
             heuristics.add_remove(file_event);
         } else {
-            eprintln!("[Watcher] Failed to lock heuristics for remove");
+            tracing::error!("Failed to lock heuristics for remove");
         }
         if let Ok(mut cache) = file_cache_thread.lock() {
             cache.remove_file(&path);
         } else {
-            eprintln!("[Watcher] Failed to lock file_cache for remove_file");
+            tracing::error!("Failed to lock file_cache for remove_file");
         }
     }
 }
@@ -112,12 +115,12 @@ fn handle_create_event(
         if let Ok(mut cache) = file_cache_thread.lock() {
             cache.update_file(&path);
         } else {
-            eprintln!("[Watcher] Failed to lock file_cache for update_file");
+            tracing::error!("Failed to lock file_cache for update_file");
         }
         let meta = match file_cache_thread.lock() {
             Ok(guard) => guard.get(&path).cloned(),
             Err(e) => {
-                eprintln!("[Watcher] Failed to lock file_cache: {e}");
+                tracing::error!(error = %e, "Failed to lock file_cache");
                 None
             }
         };
@@ -125,21 +128,16 @@ fn handle_create_event(
         let pair = match heuristics_thread.lock() {
             Ok(mut heuristics) => heuristics.pair_create(&file_event),
             Err(e) => {
-                eprintln!("[Watcher] Failed to lock heuristics for pair_create: {e}");
+                tracing::error!(error = %e, "Failed to lock heuristics for pair_create");
                 None
             }
         };
         if let Some(pair) = pair {
-            println!(
-                "[Heuristics] Move detected: {} -> {} (score: {:.2})",
-                pair.from.path.display(),
-                pair.to.path.display(),
-                pair.score
-            );
+            tracing::info!(from = %pair.from.path.display(), to = %pair.to.path.display(), score = pair.score, "Move detected");
             recently_moved.insert(pair.to.path);
             return;
         }
-        println!("[Watcher] Create: {}", path.display());
+        tracing::info!(path = %path.display(), "Create");
     }
 }
 
@@ -156,26 +154,23 @@ fn handle_modify_name_event(
             let old_parent = from.parent();
             let new_parent = to.parent();
             if old_parent == new_parent {
-                println!("[Watcher] Rename: {} -> {}", from.display(), to.display());
+                tracing::info!(from = %from.display(), to = %to.display(), "Rename");
             } else {
-                println!("[Watcher] Move: {} -> {}", from.display(), to.display());
+                tracing::info!(from = %from.display(), to = %to.display(), "Move");
             }
             if let Ok(mut cache) = file_cache_thread.lock() {
                 cache.remove_file(from);
                 cache.update_file(to);
             } else {
-                eprintln!("[Watcher] Failed to lock file_cache for rename/move");
+                tracing::error!("Failed to lock file_cache for rename/move");
             }
             recently_moved.insert(to.clone());
         }
         1 => {
-            println!(
-                "[Watcher] Rename/Move event (single path): {}",
-                paths[0].display()
-            );
+            tracing::info!(path = %paths[0].display(), "Rename/Move event (single path)");
         }
         _ => {
-            println!("[Watcher] Rename/Move event with unexpected paths: {paths:?}");
+            tracing::info!(?paths, "Rename/Move event with unexpected paths");
         }
     }
 }
@@ -214,7 +209,7 @@ fn handle_event(
             {
                 return;
             }
-            println!("[Watcher] Event: {event:?}");
+            tracing::info!(?event, "Event");
         }
     }
 }

@@ -23,6 +23,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .without_time()
         .with_span_events(FmtSpan::NONE)
         .compact()
+        .with_writer(|| {
+            struct AutoFlushStdout;
+            impl std::io::Write for AutoFlushStdout {
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    let n = std::io::stdout().write(buf)?;
+                    std::io::stdout().flush()?;
+                    Ok(n)
+                }
+                fn flush(&mut self) -> std::io::Result<()> {
+                    std::io::stdout().flush()
+                }
+            }
+            AutoFlushStdout
+        })
         .init();
     app::run()
 }

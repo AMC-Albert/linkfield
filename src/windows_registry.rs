@@ -43,7 +43,6 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
         &format!("\"{exe_path_str}\",0"),
     );
     notify_shell_assoc_changed();
-    println!(".redb extension registered to {exe_path_str}");
     info!(exe_path = %exe_path_str, "Registered .redb extension");
     Ok(())
 }

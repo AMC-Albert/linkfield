@@ -4,6 +4,7 @@
 
 use redb::{ReadableTableMetadata, TableDefinition};
 use tempfile::NamedTempFile;
+use tracing::info;
 
 const TABLE: TableDefinition<u64, u64> = TableDefinition::new("stats");
 
@@ -31,6 +32,5 @@ fn test_table_statistics() {
     let stats = table.stats().unwrap();
     let len = table.len().unwrap();
     assert_eq!(len, 10);
-    // Print stats for manual inspection (optional)
-    println!("Table stats: {:?}", stats);
+    info!("Table stats: {:?}", stats);
 }

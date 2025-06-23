@@ -5,7 +5,7 @@ pub fn handle_platform_startup() {
     use crate::windows_registry::{is_redb_registered, register_redb_extension};
     if !is_redb_registered() {
         if let Err(e) = register_redb_extension(false) {
-            eprintln!("[main] Failed to register .redb extension: {e}");
+            tracing::error!(error = %e, "Failed to register .redb extension");
         }
     }
 }
@@ -15,7 +15,7 @@ pub fn handle_platform_startup() {}
 
 pub fn wait_for_exit() {
     use std::io::{self, Read};
-    println!("\nPress Enter to exit...");
+    tracing::info!("Press Enter to exit...");
     let stdin = io::stdin();
     let mut buf = [0u8; 1];
     loop {
@@ -27,7 +27,7 @@ pub fn wait_for_exit() {
             Ok(n) if n > 0 && buf[0] == b'\n' => break,
             Ok(_) => (),
             Err(e) => {
-                eprintln!("[main] ERROR: stdin read failed: {e}");
+                tracing::error!(error = %e, "stdin read failed");
                 break;
             }
         }
