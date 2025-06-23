@@ -2,21 +2,21 @@
 
 use crate::file_cache::FileCache;
 use crate::move_heuristics::{FileEventKind, MoveHeuristics, make_file_event};
+use linkfield::ignore::IgnoreConfig;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::{info, info_span};
+use tracing::info;
 
 pub fn start_watcher<P: AsRef<Path>>(
     watch_path: P,
     file_cache: Arc<Mutex<FileCache>>,
     heuristics: Arc<Mutex<MoveHeuristics>>,
+    ignore_config: Arc<IgnoreConfig>,
 ) {
     let watch_path = watch_path.as_ref().to_path_buf();
-    let watcher_span = info_span!("start_watcher", path = %watch_path.display());
-    let _watcher_enter = watcher_span.enter();
     info!("Watching directory: {}", watch_path.display());
-    info!("Initializing watcher in background thread...");
+    info!("Initializing watcher...");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (tx, rx) = std::sync::mpsc::channel();
     let heuristics_thread = heuristics;
@@ -57,6 +57,15 @@ pub fn start_watcher<P: AsRef<Path>>(
             match result {
                 Ok(events) => {
                     for event in events {
+                        // Skip events for paths matching ignore_config
+                        if event
+                            .event
+                            .paths
+                            .iter()
+                            .any(|p| ignore_config.is_ignored(p))
+                        {
+                            continue;
+                        }
                         handle_event(
                             &event,
                             &file_cache_thread,

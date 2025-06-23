@@ -8,6 +8,7 @@ use crate::file_cache::FileCache;
 use crate::move_heuristics::MoveHeuristics;
 use crate::platform;
 use crate::watcher;
+use linkfield::ignore::IgnoreConfig;
 use tracing::{info, info_span};
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,20 +38,40 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let heuristics = Arc::new(Mutex::new(MoveHeuristics::new(Duration::from_secs(5))));
     info!("Created FileCache and Heuristics");
     std::io::stdout().flush()?;
+    // Load ignore config from .linkfieldignore and log patterns
+    let (ignore_config, _ignore_patterns) =
+        match IgnoreConfig::from_file_with_patterns(".linkfieldignore") {
+            Ok((cfg, pats)) => {
+                info!(ignore_patterns = ?pats, "Loaded ignore patterns from .linkfieldignore");
+                (cfg, pats)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to load .linkfieldignore, ignoring patterns");
+                (IgnoreConfig::empty(), vec![])
+            }
+        };
+    let ignore_config = Arc::new(ignore_config);
     // Start watcher and cache scan in parallel
     info!("About to start watcher and cache scan in parallel");
     std::io::stdout().flush()?;
     let file_cache_clone = file_cache.clone();
     let heuristics_clone = heuristics;
     let watch_root_buf_clone = watch_root_buf.clone();
+    let ignore_config_clone = ignore_config.clone();
     let watcher_handle = std::thread::spawn(move || {
         let watcher_span = info_span!("start_watcher");
         let _watcher_enter = watcher_span.enter();
-        watcher::start_watcher(&watch_root_buf_clone, file_cache_clone, heuristics_clone);
+        watcher::start_watcher(
+            &watch_root_buf_clone,
+            file_cache_clone,
+            heuristics_clone,
+            ignore_config_clone,
+        );
         info!("Started watcher");
     });
     let file_cache_bg = file_cache;
     let watch_root_bg = watch_root.to_path_buf();
+    let ignore_config_bg = ignore_config;
     let scan_handle = std::thread::spawn(move || {
         if let Ok(mut cache) = file_cache_bg.lock() {
             let load_span = info_span!("load_from_redb");
@@ -59,7 +80,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             info!("Loaded file cache from redb (background)");
             let scan_span = info_span!("scan_dir");
             let _scan_enter = scan_span.enter();
-            cache.scan_dir(&watch_root_bg);
+            FileCache::scan_dir_collect_with_ignore(&watch_root_bg, &ignore_config_bg);
             info!(
                 file_count = cache.all_files().count(),
                 "After scan_dir (background)"

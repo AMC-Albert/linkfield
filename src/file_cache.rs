@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 
+use linkfield::ignore::IgnoreConfig;
+
 pub const FILE_CACHE_TABLE: redb::TableDefinition<&str, &[u8]> =
     redb::TableDefinition::new("file_cache");
 
@@ -87,6 +89,7 @@ impl FileCache {
         }
     }
     /// Scan a directory recursively and return a map of all files (does not update cache or db)
+    #[allow(dead_code)]
     pub fn scan_dir_collect(dir: &Path) -> HashMap<PathBuf, FileMeta> {
         let scan_span = tracing::info_span!("scan_dir_collect", dir = %dir.display());
         let _scan_enter = scan_span.enter();
@@ -104,6 +107,7 @@ impl FileCache {
         tracing::info!(count = counter.load(Ordering::Relaxed), "Scanned files");
         files.into_iter().collect()
     }
+    #[allow(dead_code)]
     fn collect_files_parallel_progress(
         dir: &Path,
         _depth: usize,
@@ -128,7 +132,7 @@ impl FileCache {
             .filter_map(|entry| {
                 let path = entry.path();
                 let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
-                if count % 500 == 0 {
+                if count % 100 == 0 {
                     pb.set_position(count as u64);
                 }
                 FileMeta::from_path(&path).map(|meta| (path, meta))
@@ -144,6 +148,7 @@ impl FileCache {
         results
     }
     /// Diff the new scan with the current cache, and atomically update only changes in memory and redb (batched)
+    #[allow(dead_code)]
     pub fn diff_and_update(&mut self, new_files: &HashMap<PathBuf, FileMeta>) {
         let mut added = 0;
         let mut updated = 0;
@@ -186,6 +191,7 @@ impl FileCache {
         }
         tracing::info!(added, updated, removed, unchanged, "[FileCache][diff]");
     }
+    #[allow(dead_code)]
     fn update_redb_batch_commit(
         db: &redb::Database,
         to_remove: &[PathBuf],
@@ -223,6 +229,7 @@ impl FileCache {
         }
     }
     /// Scan a directory and atomically update only changes (calls `diff_and_update`)
+    #[allow(dead_code)]
     pub fn scan_dir(&mut self, dir: &Path) {
         let new_files = Self::scan_dir_collect(dir);
         self.diff_and_update(&new_files);
@@ -367,5 +374,80 @@ impl FileCache {
                 tracing::warn!(dir = %dir.display(), error = %e, "Error reading dir");
             }
         }
+    }
+    /// Scan a directory recursively and return a map of all files (does not update cache or db)
+    pub fn scan_dir_collect_with_ignore(
+        dir: &Path,
+        ignore: &IgnoreConfig,
+    ) -> HashMap<PathBuf, FileMeta> {
+        let scan_span = tracing::info_span!("scan_dir_collect", dir = %dir.display());
+        let _scan_enter = scan_span.enter();
+        tracing::info!("scan_dir_collect: {}", dir.display());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let pb = ProgressBar::new_spinner();
+        if let Ok(style) = ProgressStyle::with_template("{spinner:.green} Scanning files: {pos}") {
+            pb.set_style(style);
+        } else {
+            tracing::warn!("Failed to set progress bar style");
+        }
+        let files =
+            Self::collect_files_parallel_progress_with_ignore(dir, 0, &counter, &pb, ignore);
+        pb.finish_with_message("Scan complete");
+        tracing::info!(count = counter.load(Ordering::Relaxed), "Scanned files");
+        files.into_iter().collect()
+    }
+    fn collect_files_parallel_progress_with_ignore(
+        dir: &Path,
+        _depth: usize,
+        counter: &Arc<AtomicUsize>,
+        pb: &ProgressBar,
+        ignore: &IgnoreConfig,
+    ) -> Vec<(PathBuf, FileMeta)> {
+        use rayon::iter::ParallelBridge;
+        let span = tracing::info_span!("collect_files_parallel_progress", dir = %dir.display());
+        let _enter = span.enter();
+        if ignore.is_ignored(dir) {
+            tracing::warn!(ignore_match = %dir.display(), "ignoring directory due to ignore config");
+            return Vec::new();
+        }
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e.par_bridge().filter_map(Result::ok).collect::<Vec<_>>(),
+            Err(e) => {
+                tracing::warn!(error = %e, dir = %dir.display(), "Error reading dir");
+                return Vec::new();
+            }
+        };
+        let (dirs, files): (Vec<_>, Vec<_>) = entries
+            .into_par_iter()
+            .partition(|entry| entry.path().is_dir());
+        let mut results: Vec<(PathBuf, FileMeta)> = files
+            .into_par_iter()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if ignore.is_ignored(&path) {
+                    tracing::info!(ignore_match = %path.display(), "ignoring file due to ignore config");
+                    return None;
+                }
+                let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                if count % 100 == 0 {
+                    pb.set_position(count as u64);
+                }
+                FileMeta::from_path(&path).map(|meta| (path, meta))
+            })
+            .collect();
+        let mut sub_results: Vec<(PathBuf, FileMeta)> = dirs
+            .into_par_iter()
+            .flat_map_iter(|entry| {
+                Self::collect_files_parallel_progress_with_ignore(
+                    &entry.path(),
+                    0,
+                    counter,
+                    pb,
+                    ignore,
+                )
+            })
+            .collect();
+        results.append(&mut sub_results);
+        results
     }
 }
