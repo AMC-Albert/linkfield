@@ -21,12 +21,12 @@ fn start_watcher<P: AsRef<Path>>(
     heuristics: Arc<Mutex<MoveHeuristics>>,
 ) -> std::io::Result<()> {
     let watch_path = watch_path.as_ref().to_path_buf();
-    println!("[Watcher] Watching directory: {:?}", watch_path);
+    println!("[Watcher] Watching directory: {watch_path:?}");
     println!("[Watcher] Initializing watcher in background thread...");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (tx, rx) = std::sync::mpsc::channel();
-    let heuristics_thread = heuristics.clone();
-    let file_cache_thread = file_cache.clone();
+    let heuristics_thread = heuristics;
+    let file_cache_thread = file_cache;
     std::thread::spawn(move || {
         use std::collections::HashSet;
         let mut recently_moved: HashSet<std::path::PathBuf> = HashSet::new();
@@ -79,9 +79,8 @@ fn start_watcher<P: AsRef<Path>>(
                                         );
                                         recently_moved.insert(pair.to.path.clone());
                                         continue;
-                                    } else {
-                                        println!("[Watcher] Create: {:?}", path);
                                     }
+                                    println!("[Watcher] Create: {path:?}");
                                 }
                             }
                             notify_debouncer_full::notify::event::EventKind::Modify(
@@ -94,10 +93,10 @@ fn start_watcher<P: AsRef<Path>>(
                                         let to = &paths[1];
                                         let old_parent = from.parent();
                                         let new_parent = to.parent();
-                                        if old_parent != new_parent {
-                                            println!("[Watcher] Move: {:?} -> {:?}", from, to);
+                                        if old_parent == new_parent {
+                                            println!("[Watcher] Rename: {from:?} -> {to:?}");
                                         } else {
-                                            println!("[Watcher] Rename: {:?} -> {:?}", from, to);
+                                            println!("[Watcher] Move: {from:?} -> {to:?}");
                                         }
                                         file_cache_thread.lock().unwrap().remove_file(from);
                                         file_cache_thread.lock().unwrap().update_file(to);
@@ -111,8 +110,7 @@ fn start_watcher<P: AsRef<Path>>(
                                     }
                                     _ => {
                                         println!(
-                                            "[Watcher] Rename/Move event with unexpected paths: {:?}",
-                                            paths
+                                            "[Watcher] Rename/Move event with unexpected paths: {paths:?}"
                                         );
                                     }
                                 }
@@ -127,20 +125,21 @@ fn start_watcher<P: AsRef<Path>>(
                                         || std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
                                         || recently_moved.remove(p)
                                 });
-                                if let notify_debouncer_full::notify::event::EventKind::Modify(
-                                    notify_debouncer_full::notify::event::ModifyKind::Any,
-                                ) = &event.event.kind
+                                if matches!(
+                                    &event.event.kind,
+                                    notify_debouncer_full::notify::event::EventKind::Modify(
+                                        notify_debouncer_full::notify::event::ModifyKind::Any,
+                                    )
+                                ) && is_dir_event
                                 {
-                                    if is_dir_event {
-                                        continue;
-                                    }
+                                    continue;
                                 }
-                                println!("[Watcher] Event: {:?}", event);
+                                println!("[Watcher] Event: {event:?}");
                             }
                         }
                     }
                 }
-                Err(e) => println!("[Watcher] Error: {:?}", e),
+                Err(e) => println!("[Watcher] Error: {e:?}"),
             }
         }
     });
@@ -189,10 +188,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let db_path = db_path_buf.as_path();
     let watch_root = watch_root_buf.as_path();
-    println!(
-        "[main] db_path: {:?}, watch_root: {:?}",
-        db_path, watch_root
-    );
+    println!("[main] db_path: {db_path:?}, watch_root: {watch_root:?}");
     std::io::stdout().flush()?;
     let db = if db_path.exists() {
         Builder::new()
@@ -275,10 +271,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(cache) = file_cache.lock() {
         let count = cache.all_files().count();
         let total_size: u64 = cache.all_files().map(|m| m.size).sum();
-        println!(
-            "[FileCache] Initial files cached: {} (total size: {} bytes)",
-            count, total_size
-        );
+        println!("[FileCache] Initial files cached: {count} (total size: {total_size} bytes)");
     } else {
         eprintln!("[main] ERROR: failed to lock file_cache for stats");
     }

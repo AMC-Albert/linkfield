@@ -35,7 +35,7 @@ impl FileMeta {
             extension: path
                 .extension()
                 .and_then(|e| e.to_str())
-                .map(|s| s.to_string()),
+                .map(std::string::ToString::to_string),
         })
     }
     pub fn serialize(&self) -> Vec<u8> {
@@ -74,7 +74,7 @@ impl FileCache {
     }
     /// Scan a directory recursively and return a map of all files (does not update cache or db)
     pub fn scan_dir_collect(dir: &Path) -> HashMap<PathBuf, FileMeta> {
-        println!("[FileCache] scan_dir_collect: {:?}", dir);
+        println!("[FileCache] scan_dir_collect: {dir:?}");
         std::io::stdout().flush().unwrap();
         let counter = Arc::new(AtomicUsize::new(0));
         let files = Self::collect_files_parallel_progress(dir, 0, counter.clone());
@@ -95,7 +95,7 @@ impl FileCache {
         let entries = match fs::read_dir(dir) {
             Ok(e) => e.par_bridge().filter_map(Result::ok).collect::<Vec<_>>(),
             Err(e) => {
-                println!("[FileCache] Error reading dir {:?}: {}", dir, e);
+                println!("[FileCache] Error reading dir {dir:?}: {e}");
                 return Vec::new();
             }
         };
@@ -108,7 +108,7 @@ impl FileCache {
                 let path = entry.path();
                 let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
                 if count % 100 == 0 {
-                    print!("\r[FileCache] Scanning... {} files", count);
+                    print!("\r[FileCache] Scanning... {count} files");
                     std::io::stdout().flush().unwrap();
                 }
                 FileMeta::from_path(&path).map(|meta| (path, meta))
@@ -187,7 +187,7 @@ impl FileCache {
         );
         std::io::stdout().flush().unwrap();
     }
-    /// Scan a directory and atomically update only changes (calls diff_and_update)
+    /// Scan a directory and atomically update only changes (calls `diff_and_update`)
     pub fn scan_dir(&mut self, dir: &Path) {
         let new_files = Self::scan_dir_collect(dir);
         self.diff_and_update(new_files);
@@ -246,10 +246,10 @@ impl FileCache {
     #[allow(dead_code)]
     fn add_dir(&mut self, dir: &Path, depth: usize) {
         if depth > 10 {
-            println!("[FileCache] Max recursion depth reached at {:?}", dir);
+            println!("[FileCache] Max recursion depth reached at {dir:?}");
             return;
         }
-        println!("[FileCache] add_dir: {:?}", dir);
+        println!("[FileCache] add_dir: {dir:?}");
         std::io::stdout().flush().unwrap();
         match fs::read_dir(dir) {
             Ok(entries) => {
@@ -257,7 +257,7 @@ impl FileCache {
                     match entry {
                         Ok(entry) => {
                             let path = entry.path();
-                            println!("[FileCache] entry: {:?}", path);
+                            println!("[FileCache] entry: {path:?}");
                             std::io::stdout().flush().unwrap();
                             if path.is_dir() {
                                 self.add_dir(&path, depth + 1);
@@ -266,13 +266,13 @@ impl FileCache {
                             }
                         }
                         Err(e) => {
-                            println!("[FileCache] Error reading entry in {:?}: {}", dir, e);
+                            println!("[FileCache] Error reading entry in {dir:?}: {e}");
                         }
                     }
                 }
             }
             Err(e) => {
-                println!("[FileCache] Error reading dir {:?}: {}", dir, e);
+                println!("[FileCache] Error reading dir {dir:?}: {e}");
             }
         }
     }

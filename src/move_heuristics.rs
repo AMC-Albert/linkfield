@@ -33,7 +33,7 @@ pub struct MoveHeuristics {
 }
 
 impl MoveHeuristics {
-    pub fn new(max_age: Duration) -> Self {
+    pub const fn new(max_age: Duration) -> Self {
         Self {
             remove_events: VecDeque::new(),
             max_age,
@@ -50,7 +50,7 @@ impl MoveHeuristics {
     pub fn pair_create(&mut self, create: &FileEvent) -> Option<MoveCandidate> {
         self.prune_old();
         let mut best: Option<MoveCandidate> = None;
-        for remove in self.remove_events.iter() {
+        for remove in &self.remove_events {
             let score = score_pair(remove, create);
             // Suppress noisy score log
             // eprintln!(
@@ -127,7 +127,7 @@ pub fn score_pair(remove: &FileEvent, create: &FileEvent) -> f64 {
     score.min(1.0f64)
 }
 
-/// Helper to create a FileEvent from a path and kind
+/// Helper to create a `FileEvent` from a path and kind
 pub fn make_file_event(path: PathBuf, kind: FileEventKind, meta: Option<FileMeta>) -> FileEvent {
     FileEvent {
         path,

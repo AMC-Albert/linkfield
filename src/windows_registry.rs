@@ -39,14 +39,14 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             None,
             REG_SZ,
             Some(std::slice::from_raw_parts(
-                prog_id_wide.as_ptr() as *const u8,
+                prog_id_wide.as_ptr().cast::<u8>(),
                 prog_id_wide.len() * 2,
             )),
         );
         let _ = RegCloseKey(hkey);
 
         // ProgID
-        let progid_path = to_wide(&format!(r"Software\Classes\{}", prog_id));
+        let progid_path = to_wide(&format!(r"Software\Classes\{prog_id}"));
         let mut hkey = HKEY::default();
         let _ = RegCreateKeyExW(
             hkcu,
@@ -66,7 +66,7 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             None,
             REG_SZ,
             Some(std::slice::from_raw_parts(
-                friendly_name_wide.as_ptr() as *const u8,
+                friendly_name_wide.as_ptr().cast::<u8>(),
                 friendly_name_wide.len() * 2,
             )),
         );
@@ -85,7 +85,7 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             &mut shell_key,
             None,
         );
-        let command = format!("\"{}\" \"%1\"", exe_path);
+        let command = format!("\"{exe_path}\" \"%1\"");
         let command_wide = to_wide(&command);
         let _ = RegSetValueExW(
             shell_key,
@@ -93,7 +93,7 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             None,
             REG_SZ,
             Some(std::slice::from_raw_parts(
-                command_wide.as_ptr() as *const u8,
+                command_wide.as_ptr().cast::<u8>(),
                 command_wide.len() * 2,
             )),
         );
@@ -113,7 +113,7 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             &mut icon_key,
             None,
         );
-        let icon_val = format!("\"{}\",0", exe_path);
+        let icon_val = format!("\"{exe_path}\",0");
         let icon_val_wide = to_wide(&icon_val);
         let _ = RegSetValueExW(
             icon_key,
@@ -121,7 +121,7 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             None,
             REG_SZ,
             Some(std::slice::from_raw_parts(
-                icon_val_wide.as_ptr() as *const u8,
+                icon_val_wide.as_ptr().cast::<u8>(),
                 icon_val_wide.len() * 2,
             )),
         );
@@ -136,7 +136,7 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
             Some(std::ptr::null()),
         );
     }
-    println!(".redb extension registered to {}", exe_path);
+    println!(".redb extension registered to {exe_path}");
     Ok(())
 }
 
@@ -174,7 +174,7 @@ pub fn is_redb_registered() -> bool {
                 None,
                 None,
                 None,
-                Some(buf.as_mut_ptr() as *mut u8),
+                Some(buf.as_mut_ptr().cast::<u8>()),
                 Some(&mut buf_len),
             )
             .is_ok()
