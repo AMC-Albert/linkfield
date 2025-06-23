@@ -127,6 +127,14 @@ pub fn register_redb_extension(_all_users: bool) -> std::io::Result<()> {
         );
         let _ = RegCloseKey(icon_key);
         let _ = RegCloseKey(hkey);
+        // Notify Windows Explorer to refresh icons and associations
+        use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED,
+            SHCNF_IDLIST,
+            Some(std::ptr::null()),
+            Some(std::ptr::null()),
+        );
     }
     println!(".redb extension registered to {}", exe_path);
     Ok(())
