@@ -29,18 +29,6 @@ fn start_watcher<P: AsRef<Path>>(
 
     let heuristics_thread = heuristics.clone();
     let file_cache_thread = file_cache.clone();
-    // Initial scan
-    file_cache.lock().unwrap().scan_dir(&watch_path);
-    println!(
-        "[FileCache] After scan_dir: {} files",
-        file_cache.lock().unwrap().all_files().count()
-    );
-    file_cache.lock().unwrap().load_from_redb();
-    println!(
-        "[FileCache] After load_from_redb: {} files",
-        file_cache.lock().unwrap().all_files().count()
-    );
-
     std::thread::spawn(move || {
         println!("[WatcherThread] Event loop started");
         for result in rx {
@@ -234,8 +222,6 @@ fn main() {
     );
     std::io::stdout().flush().unwrap();
     println!("[main] About to start watcher");
-    std::io::stdout().flush().unwrap();
-    println!("[Watcher] Watching directory: {:?}", watch_root);
     std::io::stdout().flush().unwrap();
     start_watcher(watch_root, file_cache.clone(), heuristics).expect("Failed to start watcher");
     println!("[main] Started watcher");
