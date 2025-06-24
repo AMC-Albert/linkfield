@@ -2,13 +2,13 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::args;
-use crate::db;
-use crate::file_cache::FileCache;
-use crate::move_heuristics::MoveHeuristics;
-use crate::platform;
-use crate::watcher;
-use linkfield::ignore::IgnoreConfig;
+use linkfield::args;
+use linkfield::db;
+use linkfield::file_cache::FileCache;
+use linkfield::ignore_config::IgnoreConfig;
+use linkfield::move_heuristics::MoveHeuristics;
+use linkfield::platform;
+use linkfield::watcher;
 use tracing::{info, info_span};
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,17 +31,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 	std::io::stdout().flush()?;
 	info!("Ensuring file_cache table exists...");
 	std::io::stdout().flush()?;
-	crate::file_cache::db::ensure_file_cache_table(&db)?;
+	linkfield::file_cache::ensure_file_cache_table(&db)?;
 	info!("file_cache table ready");
 	std::io::stdout().flush()?;
-	// Instead of FileCache::with_redb(db), use FileCache::new_root with the root dir name
-	let file_cache = Arc::new(Mutex::new(FileCache::new_root(
-		watch_root
-			.file_name()
-			.map(|n| n.to_string_lossy())
-			.as_deref()
-			.unwrap_or("root"),
-	)));
+	// Use FileCache::new_root with the root dir name
+	let file_cache = FileCache::new_root(watch_root.to_string_lossy().as_ref());
+	let file_cache = Arc::new(Mutex::new(file_cache));
 	let heuristics = Arc::new(Mutex::new(MoveHeuristics::new(Duration::from_secs(5))));
 	info!("Created FileCache and Heuristics");
 	std::io::stdout().flush()?;
@@ -80,26 +75,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 	let watch_root_bg = watch_root.to_path_buf();
 	let ignore_config_bg = ignore_config;
 	let scan_handle = std::thread::spawn(move || {
-		if let Ok(mut cache) = file_cache_bg.lock() {
+		if let Ok(cache) = file_cache_bg.lock() {
 			let scan_span = info_span!("scan_dir");
 			let _scan_enter = scan_span.enter();
-			cache.scan_dir_collect_with_ignore(&watch_root_bg, &ignore_config_bg, None);
+			cache.scan_dir_collect_with_ignore_and_commit(
+				&db,
+				&watch_root_bg,
+				&ignore_config_bg,
+				None,
+				1000,
+			);
 			info!(
-				file_count = cache.all_files().count(),
+				file_count = cache.all_files().len(),
 				"After scan_dir (background)"
 			);
+			// Optionally compact the database after scan
+			match db::compact_database(&mut db) {
+				Ok(true) => info!("Database compaction performed"),
+				Ok(false) => info!("Database compaction not needed"),
+				Err(e) => tracing::warn!(error = %e, "Database compaction failed"),
+			}
 		} else {
 			tracing::error!("failed to lock file_cache for background scan");
 		}
 	});
 	watcher_handle.join().ok();
 	scan_handle.join().ok();
-	// Optionally compact the database after scan
-	match db::compact_database(&mut db) {
-		Ok(true) => info!("Database compaction performed"),
-		Ok(false) => info!("Database compaction not needed"),
-		Err(e) => tracing::warn!(error = %e, "Database compaction failed"),
-	}
 	platform::wait_for_exit();
 	Ok(())
 }

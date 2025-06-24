@@ -1,8 +1,8 @@
 // File system watcher and event handling logic will be moved here
 
 use crate::file_cache::FileCache;
+use crate::ignore_config::IgnoreConfig;
 use crate::move_heuristics::{FileEventKind, MoveHeuristics, make_file_event};
-use linkfield::ignore::IgnoreConfig;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,7 +10,7 @@ use tracing::info;
 
 pub fn start_watcher<P: AsRef<Path>>(
 	watch_path: P,
-	file_cache: Arc<Mutex<FileCache>>,
+	file_cache: Arc<Mutex<Arc<FileCache>>>,
 	heuristics: Arc<Mutex<MoveHeuristics>>,
 	ignore_config: Arc<IgnoreConfig>,
 ) {
@@ -87,13 +87,13 @@ pub fn start_watcher<P: AsRef<Path>>(
 
 fn handle_remove_event(
 	event: &notify_debouncer_full::DebouncedEvent,
-	file_cache_thread: &Arc<Mutex<FileCache>>,
+	file_cache_thread: &Arc<Mutex<Arc<FileCache>>>,
 	heuristics_thread: &Arc<Mutex<MoveHeuristics>>,
 ) {
 	let path = event.event.paths.first().cloned();
 	if let Some(path) = path {
 		let meta = match file_cache_thread.lock() {
-			Ok(guard) => guard.get(&path).cloned(),
+			Ok(guard) => guard.get(&path).map(|m| m.clone()),
 			Err(e) => {
 				tracing::error!(error = %e, "Failed to lock file_cache");
 				None
@@ -105,7 +105,7 @@ fn handle_remove_event(
 		} else {
 			tracing::error!("Failed to lock heuristics for remove");
 		}
-		if let Ok(mut cache) = file_cache_thread.lock() {
+		if let Ok(cache) = file_cache_thread.lock() {
 			cache.remove_file(&path);
 		} else {
 			tracing::error!("Failed to lock file_cache for remove_file");
@@ -115,19 +115,19 @@ fn handle_remove_event(
 
 fn handle_create_event(
 	event: &notify_debouncer_full::DebouncedEvent,
-	file_cache_thread: &Arc<Mutex<FileCache>>,
+	file_cache_thread: &Arc<Mutex<Arc<FileCache>>>,
 	heuristics_thread: &Arc<Mutex<MoveHeuristics>>,
 	recently_moved: &mut std::collections::HashSet<std::path::PathBuf>,
 ) {
 	let path = event.event.paths.first().cloned();
 	if let Some(path) = path {
-		if let Ok(mut cache) = file_cache_thread.lock() {
+		if let Ok(cache) = file_cache_thread.lock() {
 			cache.update_file(&path);
 		} else {
 			tracing::error!("Failed to lock file_cache for update_file");
 		}
 		let meta = match file_cache_thread.lock() {
-			Ok(guard) => guard.get(&path).cloned(),
+			Ok(guard) => guard.get(&path).map(|m| m.clone()),
 			Err(e) => {
 				tracing::error!(error = %e, "Failed to lock file_cache");
 				None
@@ -152,7 +152,7 @@ fn handle_create_event(
 
 fn handle_modify_name_event(
 	event: &notify_debouncer_full::DebouncedEvent,
-	file_cache_thread: &Arc<Mutex<FileCache>>,
+	file_cache_thread: &Arc<Mutex<Arc<FileCache>>>,
 	recently_moved: &mut std::collections::HashSet<std::path::PathBuf>,
 ) {
 	let paths = &event.event.paths;
@@ -167,7 +167,7 @@ fn handle_modify_name_event(
 			} else {
 				tracing::info!(from = %from.display(), to = %to.display(), "Move");
 			}
-			if let Ok(mut cache) = file_cache_thread.lock() {
+			if let Ok(cache) = file_cache_thread.lock() {
 				cache.remove_file(from);
 				cache.update_file(to);
 			} else {
@@ -186,7 +186,7 @@ fn handle_modify_name_event(
 
 fn handle_event(
 	event: &notify_debouncer_full::DebouncedEvent,
-	file_cache_thread: &Arc<Mutex<FileCache>>,
+	file_cache_thread: &Arc<Mutex<Arc<FileCache>>>,
 	heuristics_thread: &Arc<Mutex<MoveHeuristics>>,
 	recently_moved: &mut std::collections::HashSet<std::path::PathBuf>,
 ) {

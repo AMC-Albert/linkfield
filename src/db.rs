@@ -1,4 +1,4 @@
-// Database setup and table creation logic will be moved here
+// Database setup and table creation logic
 
 use redb::{Builder, Database};
 use std::error::Error;
