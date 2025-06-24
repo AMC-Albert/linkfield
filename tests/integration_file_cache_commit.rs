@@ -7,15 +7,28 @@ use std::fs::{self, File};
 use std::io::Write;
 use sysinfo::{ProcessesToUpdate, System};
 use tempfile::tempdir;
+use tracing::info;
+use tracing_subscriber;
+
+fn init_test_tracing() {
+	let _ = tracing_subscriber::fmt()
+		.with_thread_names(true)
+		.with_file(false)
+		.pretty()
+		.without_time()
+		.try_init();
+}
 
 #[test]
 fn test_file_cache_batch_commit() {
+	init_test_tracing();
+
 	let mut sys = System::new_all();
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let pid = sysinfo::get_current_pid().unwrap();
 	let process = sys.process(pid).unwrap();
 	let mem_before = process.memory();
-	println!("Memory before file creation: {} KB", mem_before);
+	info!("Memory before file creation: {} KB", mem_before);
 
 	let temp = tempdir().unwrap();
 	let db_path = temp.path().join("test.redb");
@@ -33,7 +46,7 @@ fn test_file_cache_batch_commit() {
 
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let mem_after_files = sys.process(pid).unwrap().memory();
-	println!("Memory after file creation: {} KB", mem_after_files);
+	info!("Memory after file creation: {} KB", mem_after_files);
 
 	// Scan and commit in batches
 	let cache = FileCache::new_root("files");
@@ -41,7 +54,7 @@ fn test_file_cache_batch_commit() {
 	let mut batch_logger = |batch_num: usize| {
 		sys.refresh_processes(ProcessesToUpdate::All, true);
 		let mem = sys.process(pid).unwrap().memory();
-		println!("[test] After batch {batch_num}: memory = {mem} KB");
+		info!("After batch {}: memory = {} KB", batch_num, mem);
 	};
 	cache.scan_dir_collect_with_ignore_and_commit(
 		&db,
@@ -55,14 +68,14 @@ fn test_file_cache_batch_commit() {
 	std::thread::sleep(std::time::Duration::from_secs(1));
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let mem_after_scan = sys.process(pid).unwrap().memory();
-	println!("Memory after scan: {} KB", mem_after_scan);
-	println!("Cache entry count after scan: {}", cache.entries.len());
+	info!("Memory after scan: {} KB", mem_after_scan);
+	info!("Cache entry count after scan: {}", cache.entries.len());
 	// Drop the in-memory cache to free memory
 	drop(cache);
 	std::thread::sleep(std::time::Duration::from_secs(1));
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let mem_after_drop = sys.process(pid).unwrap().memory();
-	println!("Memory after drop: {} KB", mem_after_drop);
+	info!("Memory after drop: {} KB", mem_after_drop);
 
 	// Open a new transaction and check that all files are in the db
 	let txn = db.begin_read().unwrap();
@@ -84,15 +97,14 @@ fn test_file_cache_batch_commit() {
 
 #[test]
 fn test_file_cache_sequential_streaming() {
+	init_test_tracing();
+
 	let mut sys = System::new_all();
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let pid = sysinfo::get_current_pid().unwrap();
 	let process = sys.process(pid).unwrap();
 	let mem_before = process.memory();
-	println!(
-		"[sequential] Memory before file creation: {} KB",
-		mem_before
-	);
+	info!("Memory before file creation: {} KB", mem_before);
 
 	let temp = tempdir().unwrap();
 	let db_path = temp.path().join("test_seq.redb");
@@ -110,10 +122,7 @@ fn test_file_cache_sequential_streaming() {
 
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let mem_after_files = sys.process(pid).unwrap().memory();
-	println!(
-		"[sequential] Memory after file creation: {} KB",
-		mem_after_files
-	);
+	info!("Memory after file creation: {} KB", mem_after_files);
 
 	// Scan and commit in batches, sequential streaming
 	let cache = FileCache::new_root("files");
@@ -121,7 +130,7 @@ fn test_file_cache_sequential_streaming() {
 	let mut batch_logger = |batch_num: usize| {
 		sys.refresh_processes(ProcessesToUpdate::All, true);
 		let mem = sys.process(pid).unwrap().memory();
-		println!("[sequential] After batch {batch_num}: memory = {mem} KB");
+		info!("After batch {}: memory = {} KB", batch_num, mem);
 	};
 	sequential_scan::scan_dir_sequential_streaming(
 		&cache,
@@ -135,16 +144,13 @@ fn test_file_cache_sequential_streaming() {
 	std::thread::sleep(std::time::Duration::from_secs(1));
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let mem_after_scan = sys.process(pid).unwrap().memory();
-	println!("[sequential] Memory after scan: {} KB", mem_after_scan);
-	println!(
-		"[sequential] Cache entry count after scan: {}",
-		cache.entries.len()
-	);
+	info!("Memory after scan: {} KB", mem_after_scan);
+	info!("Cache entry count after scan: {}", cache.entries.len());
 	drop(cache);
 	std::thread::sleep(std::time::Duration::from_secs(1));
 	sys.refresh_processes(ProcessesToUpdate::All, true);
 	let mem_after_drop = sys.process(pid).unwrap().memory();
-	println!("[sequential] Memory after drop: {} KB", mem_after_drop);
+	info!("Memory after drop: {} KB", mem_after_drop);
 
 	let txn = db.begin_read().unwrap();
 	let table = txn.open_table(FILE_CACHE_TABLE).unwrap();
@@ -153,11 +159,11 @@ fn test_file_cache_sequential_streaming() {
 
 	assert!(
 		mem_after_scan < mem_after_files + 20_000,
-		"[sequential] Memory usage grew too much during scan: before files = {mem_before}, after files = {mem_after_files}, after scan = {mem_after_scan}"
+		"Memory usage grew too much during scan: before files = {mem_before}, after files = {mem_after_files}, after scan = {mem_after_scan}"
 	);
 	assert!(
 		mem_after_drop <= mem_after_scan,
-		"[sequential] Memory was not released after dropping cache"
+		"Memory was not released after dropping cache"
 	);
 }
 
