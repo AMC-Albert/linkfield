@@ -33,7 +33,7 @@ pub fn ensure_file_cache_table(db: &Database) -> Result<(), Box<dyn Error>> {
             return Err(Box::new(e));
         }
     };
-    match write_txn.open_table(crate::file_cache::FILE_CACHE_TABLE) {
+    match write_txn.open_table(crate::file_cache::db::FILE_CACHE_TABLE) {
         Ok(_) => tracing::info!("file_cache table opened/created successfully"),
         Err(e) => {
             tracing::error!(error = %e, "Failed to open/create file_cache table");
