@@ -258,6 +258,7 @@ impl FileCache {
 		ignore: &IgnoreConfig,
 		parent: Option<u64>,
 		batch_size: usize,
+		mut on_batch: Option<&mut dyn FnMut(usize)>,
 	) {
 		use rayon::prelude::*;
 		use std::fs;
@@ -274,29 +275,44 @@ impl FileCache {
 			}
 		};
 		let mut batch = Vec::with_capacity(batch_size);
-		// Collect file metas in parallel
-		let file_metas: Vec<_> = entries
-			.par_iter()
-			.filter_map(|entry| {
-				let path = entry.path();
-				if path.is_dir() || ignore.is_ignored(&path) {
-					return None;
+		let mut batch_keys = Vec::with_capacity(batch_size);
+		let mut batch_count = 0;
+		for entry in &entries {
+			let path = entry.path();
+			if path.is_dir() || ignore.is_ignored(&path) {
+				continue;
+			}
+			let name = match path.file_name().map(|n| n.to_string_lossy()) {
+				Some(n) => n.to_string(),
+				None => continue,
+			};
+			if let Some(meta) = crate::file_cache::meta::FileMeta::from_path(&path) {
+				let key = self.update_or_insert_file(&name, parent_key, meta.clone());
+				batch.push((meta.path.clone(), meta.clone()));
+				batch_keys.push(key);
+				if batch.len() >= batch_size {
+					crate::file_cache::db::update_redb_batch_commit(db, &[], &batch);
+					for key in &batch_keys {
+						self.entries.remove(key);
+					}
+					batch.clear();
+					batch_keys.clear();
+					batch_count += 1;
+					if let Some(cb) = on_batch.as_mut() {
+						cb(batch_count);
+					}
 				}
-				let name = path.file_name().map(|n| n.to_string_lossy())?;
-				let meta = crate::file_cache::meta::FileMeta::from_path(&path)?;
-				Some((name.to_string(), meta))
-			})
-			.collect();
-		for (name, meta) in file_metas {
-			self.update_or_insert_file(&name, parent_key, meta.clone());
-			batch.push((meta.path.clone(), meta.clone()));
-			if batch.len() >= batch_size {
-				crate::file_cache::db::update_redb_batch_commit(db, &[], &batch);
-				batch.clear();
 			}
 		}
 		if !batch.is_empty() {
 			crate::file_cache::db::update_redb_batch_commit(db, &[], &batch);
+			for key in &batch_keys {
+				self.entries.remove(key);
+			}
+			batch_count += 1;
+			if let Some(cb) = on_batch.as_mut() {
+				cb(batch_count);
+			}
 		}
 		// Collect subdirs and recurse in parallel
 		let subdirs: Vec<_> = entries
@@ -318,6 +334,7 @@ impl FileCache {
 				ignore,
 				Some(dir_key),
 				batch_size,
+				None, // Don't propagate callback to subdirs for simplicity
 			);
 		});
 	}

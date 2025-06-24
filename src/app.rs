@@ -84,6 +84,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 				&ignore_config_bg,
 				None,
 				1000,
+				None, // No batch callback in production
 			);
 			info!(
 				file_count = cache.all_files().len(),

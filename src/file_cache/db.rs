@@ -44,6 +44,11 @@ pub fn update_redb_batch_commit(
 	to_remove: &[FileCachePath],
 	to_add_or_update: &[(FileCachePath, FileMeta)],
 ) {
+	println!(
+		"[batch commit] Committing batch of {} files, removing {}",
+		to_add_or_update.len(),
+		to_remove.len()
+	);
 	let write_txn = match db.begin_write() {
 		Ok(txn) => txn,
 		Err(e) => {
