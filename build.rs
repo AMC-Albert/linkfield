@@ -1,3 +1,3 @@
 fn main() {
-    let _ = embed_resource::compile("linkfield.rc", &[] as &[&str]);
+	let _ = embed_resource::compile("linkfield.rc", &[] as &[&str]);
 }
